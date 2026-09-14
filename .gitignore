@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ----- Project specific (AstrBot plugin) -----
+# 运行时生成的数据目录(典库 quotes.json/quotes.json.bak、t2i 模板等,用户数据勿提交)
+data/
+
+# 编辑器/IDE 本地配置(sftp 部署配置等,可能含服务器敏感信息)
+.vscode/
+.idea/

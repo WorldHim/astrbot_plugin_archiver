@@ -2,7 +2,7 @@
 import sys
 import types
 
-from astrbot.api.message_components import Image, Plain
+from astrbot.api.message_components import Forward, Image, Node, Nodes, Plain
 
 from astrbot_plugin_archiver import main as archiver_main
 
@@ -20,9 +20,15 @@ class TestRudian:
         event = make_reply_event(make_reply())
         results = collect(plugin.rudian(event))
         assert len(results) == 1
-        kind, text = results[0]
-        assert kind == "plain"
-        assert "张三" in text and "1 条" in text
+        kind, payload = results[0]
+        # 默认以聊天记录(合并转发)形式回执:chain = [Nodes]
+        assert kind == "chain"
+        nodes_obj = payload[0]
+        assert nodes_obj.nodes[0].name == "张三"
+        assert nodes_obj.nodes[0].content[0].text == "哈哈哈哈"
+        # 尾部节点为确认信息
+        assert "已收录" in nodes_obj.nodes[-1].content[0].text
+        assert "1 条" in nodes_obj.nodes[-1].content[0].text
         # 已写入典库
         quotes = plugin._storage.session_quotes(UMO_GROUP)
         assert len(quotes) == 1
@@ -120,6 +126,14 @@ class TestRudian:
         quotes = plugin._storage.session_quotes(UMO_GROUP)
         assert [q.message_id for q in quotes] == ["m2", "m3"]
 
+    def test_archive_forward_disabled(self, tmp_path):
+        # 关闭 use_forward → 收录回执回退为纯文本
+        plugin = _plugin_with_config(tmp_path, {"use_forward": False})
+        event = make_reply_event(make_reply())
+        results = collect(plugin.rudian(event))
+        assert results[0][0] == "plain"
+        assert "已收录" in results[0][1] and "1 条" in results[0][1]
+
 class TestLaidiandian:
     def test_empty_library_prompt(self, plugin):
         event = make_reply_event(None)
@@ -131,9 +145,10 @@ class TestLaidiandian:
         event = make_reply_event(None)
         results = collect(plugin.laidiandian(event))
         assert results[0][0] == "chain"
-        chain = results[0][1]
-        assert len(chain) == 1
-        assert "张三" in chain[0].text and "哈哈哈哈" in chain[0].text
+        # chain = [Nodes],典藏以聊天记录(合并转发)形式呈现
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "张三"
+        assert "哈哈哈哈" in nodes_obj.nodes[0].content[0].text
 
     def test_random_replay_with_image(self, plugin):
         plugin._storage.add_quote(
@@ -142,10 +157,55 @@ class TestLaidiandian:
         )
         event = make_reply_event(None)
         results = collect(plugin.laidiandian(event))
+        node = results[0][1][0].nodes[0]
+        assert len(node.content) == 2
+        img = node.content[1]
+        assert img.file == "http://example.com/a.jpg"
+
+    def test_replay_includes_archive_info_node(self, plugin):
+        # 收录人/时间有效时附带"典藏档案"信息节点
+        import time as _time
+
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(archived_at_ts=_time.time())
+        )
+        event = make_reply_event(None)
+        results = collect(plugin.laidiandian(event))
+        nodes_obj = results[0][1][0]
+        assert len(nodes_obj.nodes) == 2
+        assert nodes_obj.nodes[1].name == "典藏档案"
+        assert "收录人：tester" in nodes_obj.nodes[1].content[0].text
+
+    def test_forward_disabled_falls_back_to_text(self, tmp_path):
+        # 关闭 use_forward → 回退为文本形式(chain[Plain+Image])
+        plugin = _plugin_with_config(tmp_path, {"use_forward": False})
+        plugin._storage.add_quote(
+            UMO_GROUP,
+            make_quote(images=[{"file": "", "url": "http://example.com/a.jpg"}]),
+        )
+        event = make_reply_event(None)
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
         chain = results[0][1]
         assert len(chain) == 2
-        img = chain[1]
-        assert img.file == "http://example.com/a.jpg"
+        assert "张三" in chain[0].text
+        assert chain[1].file == "http://example.com/a.jpg"
+
+    def test_unsupported_platform_falls_back_to_text(self, plugin):
+        # 不支持自建合并转发的平台(如 webchat)自动回退为文本输出,避免输出被忽略
+        plugin._storage.add_quote(UMO_GROUP, make_quote())
+        event = make_reply_event(None, platform_name="webchat")
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
+        chain = results[0][1]
+        assert "张三" in chain[0].text
+
+    def test_unsupported_platform_archive_falls_back_to_text(self, plugin):
+        # 不支持合并转发的平台上,收录回执同样回退为纯文本
+        event = make_reply_event(make_reply(), platform_name="webchat")
+        results = collect(plugin.rudian(event))
+        assert results[0][0] == "plain"
+        assert "已收录" in results[0][1]
 
     def test_replay_prefers_url_over_file(self, plugin):
         plugin._storage.add_quote(
@@ -154,7 +214,7 @@ class TestLaidiandian:
         )
         event = make_reply_event(None)
         results = collect(plugin.laidiandian(event))
-        assert results[0][1][1].file == "http://example.com/b.jpg"
+        assert results[0][1][0].nodes[0].content[1].file == "http://example.com/b.jpg"
 
     def test_replay_prefers_local_archive(self, plugin, tmp_path):
         # 本地存档存在 → 优先发送本地文件而非 URL
@@ -167,9 +227,9 @@ class TestLaidiandian:
         )
         event = make_reply_event(None)
         results = collect(plugin.laidiandian(event))
-        chain = results[0][1]
-        assert len(chain) == 2
-        assert chain[1].file == str((plugin._storage._base_dir / rel).resolve())
+        node = results[0][1][0].nodes[0]
+        assert len(node.content) == 2
+        assert node.content[1].file == str((plugin._storage._base_dir / rel).resolve())
 
     def test_replay_falls_back_to_url_when_local_missing(self, plugin):
         # 本地存档文件不存在 → 回退发送 URL
@@ -183,9 +243,9 @@ class TestLaidiandian:
         )
         event = make_reply_event(None)
         results = collect(plugin.laidiandian(event))
-        chain = results[0][1]
-        assert len(chain) == 2
-        assert chain[1].file == "http://example.com/a.jpg"
+        node = results[0][1][0].nodes[0]
+        assert len(node.content) == 2
+        assert node.content[1].file == "http://example.com/a.jpg"
 
     def test_fallback_global_disabled_by_default(self, plugin):
         # 其他会话有典,本会话为空;默认不开全局回退 → 提示典库为空
@@ -200,7 +260,184 @@ class TestLaidiandian:
         event = make_reply_event(None, umo="aiocqhttp:GroupMessage:current")
         results = collect(plugin.laidiandian(event))
         assert results[0][0] == "chain"
-        assert "张三" in results[0][1][0].text
+        # 聊天记录形式:发送人昵称在节点上,内容为典藏文本
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "张三"
+        assert nodes_obj.nodes[0].content[0].text == "哈哈哈哈"
+
+
+class TestForward:
+    # 模拟 OneBot get_forward_msg 响应(结构化子消息)
+    FORWARD_RESPONSES = {
+        "get_forward_msg": {
+            "data": {
+                "messages": [
+                    {
+                        "sender": {"nickname": "张三", "user_id": "20002"},
+                        "message": [
+                            {"type": "text", "data": {"text": "今天天气真好"}}
+                        ],
+                    },
+                    {
+                        "sender": {"nickname": "李四", "user_id": "30003"},
+                        "message": [
+                            {"type": "text", "data": {"text": "是啊"}},
+                            {
+                                "type": "image",
+                                "data": {"url": "http://example.com/a.jpg"},
+                            },
+                        ],
+                    },
+                ]
+            }
+        }
+    }
+
+    def test_forward_stored_as_chat_record(self, plugin):
+        # 引用内容为聊天记录(Forward) → 以聊天记录结构化保存,不展开为文本
+        reply = make_reply(chain=[Forward(id="fwd-1")], message_str="")
+        event = make_reply_event(reply, bot_responses=self.FORWARD_RESPONSES)
+        results = collect(plugin.rudian(event))
+        assert len(results) == 1
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.text == "[聊天记录]"
+        assert len(q.forward_nodes) == 2
+        assert q.forward_nodes[0]["sender_name"] == "张三"
+        assert q.forward_nodes[0]["sender_id"] == "20002"
+        assert q.forward_nodes[0]["text"] == "今天天气真好"
+        assert q.forward_nodes[1]["sender_name"] == "李四"
+        assert q.forward_nodes[1]["text"] == "是啊"
+        # 子消息图片保留 URL(下载失败回退)
+        assert (
+            q.forward_nodes[1]["images"][0]["url"] == "http://example.com/a.jpg"
+        )
+        # 回执:原样回显引用的聊天记录 + 最后收录信息(而非 [聊天记录] 占位符)
+        kind, payload = results[0]
+        assert kind == "chain"
+        nodes_obj = payload[0]
+        assert len(nodes_obj.nodes) == 3
+        assert nodes_obj.nodes[0].name == "张三"
+        assert nodes_obj.nodes[0].content[0].text == "今天天气真好"
+        assert nodes_obj.nodes[1].name == "李四"
+        assert nodes_obj.nodes[1].content[0].text == "是啊"
+        assert nodes_obj.nodes[-1].name == "典藏档案"
+        assert "已收录" in nodes_obj.nodes[-1].content[0].text
+        # 回执中不出现占位符
+        for node in nodes_obj.nodes:
+            for comp in node.content:
+                assert getattr(comp, "text", "") != "[聊天记录]"
+
+    def test_forward_extract_failure_falls_back_to_placeholder(self, plugin):
+        # 拉取失败(平台无 bot 接口/接口失败) → 回退 [转发消息] 占位符
+        reply = make_reply(chain=[Forward(id="fwd-1")], message_str="")
+        event = make_reply_event(reply)  # 无 bot 接口,无 forward_text
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.text == "[转发消息]"
+        assert q.forward_nodes == []
+
+    def test_forward_placeholder_result_falls_back(self, plugin):
+        # 展开文本回退结果仍为占位符 → 回退 [转发消息] 占位符
+        reply = make_reply(chain=[Forward(id="fwd-1")], message_str="")
+        event = make_reply_event(reply, forward_text="[转发消息]")
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.text == "[转发消息]"
+        assert q.forward_nodes == []
+
+    def test_nodes_with_embedded_content_stored(self, plugin):
+        # 引用内容为 Node/Nodes(内嵌 content) → 结构化保存,不展开为文本
+        node = Node(content=[Plain("天气真好")], name="张三", uin="20002")
+        reply = make_reply(chain=[Nodes(nodes=[node])], message_str="")
+        event = make_reply_event(reply)
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.text == "[聊天记录]"
+        assert len(q.forward_nodes) == 1
+        assert q.forward_nodes[0]["sender_name"] == "张三"
+        assert q.forward_nodes[0]["text"] == "天气真好"
+
+    def test_mixed_text_and_forward(self, plugin):
+        # 文本 + 聊天记录混合 → 外层文本保留,聊天记录结构化保存
+        reply = make_reply(chain=[Plain("看这个"), Forward(id="fwd-1")], message_str="")
+        event = make_reply_event(reply, bot_responses=self.FORWARD_RESPONSES)
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.text == "看这个\n[聊天记录]"
+        assert len(q.forward_nodes) == 2
+
+    def test_forward_replay_keeps_chat_record(self, plugin):
+        # 回放:聊天记录典保持聊天记录形态,最后一条为收录信息节点
+        plugin._storage.add_quote(
+            UMO_GROUP,
+            make_quote(
+                text="[聊天记录]",
+                forward_nodes=[
+                    {
+                        "sender_id": "20002",
+                        "sender_name": "张三",
+                        "text": "今天天气真好",
+                        "images": [],
+                    },
+                    {
+                        "sender_id": "30003",
+                        "sender_name": "李四",
+                        "text": "是啊",
+                        "images": [],
+                    },
+                ],
+                archived_at_ts=1757800000,
+            ),
+        )
+        event = make_reply_event(None)
+        results = collect(plugin.laidiandian(event))
+        nodes_obj = results[0][1][0]
+        # 2 条子消息节点 + 1 条收录信息节点
+        assert len(nodes_obj.nodes) == 3
+        assert nodes_obj.nodes[0].name == "张三"
+        assert nodes_obj.nodes[0].content[0].text == "今天天气真好"
+        assert nodes_obj.nodes[1].name == "李四"
+        # 最后为收录信息节点
+        assert nodes_obj.nodes[-1].name == "典藏档案"
+        assert "收录人" in nodes_obj.nodes[-1].content[0].text
+
+    def test_forward_replay_mixed_outer_text(self, plugin):
+        # 回放:外层文本作为第一条节点(被收录者身份),后接聊天记录与收录信息
+        plugin._storage.add_quote(
+            UMO_GROUP,
+            make_quote(
+                text="看这个\n[聊天记录]",
+                forward_nodes=[
+                    {
+                        "sender_id": "20002",
+                        "sender_name": "张三",
+                        "text": "今天天气真好",
+                        "images": [],
+                    },
+                ],
+                archived_at_ts=1757800000,
+            ),
+        )
+        event = make_reply_event(None)
+        results = collect(plugin.laidiandian(event))
+        nodes_obj = results[0][1][0]
+        assert len(nodes_obj.nodes) == 3
+        # 第一条为外层文本节点(被收录者身份)
+        assert nodes_obj.nodes[0].name == "张三"
+        assert nodes_obj.nodes[0].content[0].text == "看这个"
+        # 中间为聊天记录子消息
+        assert nodes_obj.nodes[1].content[0].text == "今天天气真好"
+        # 最后为收录信息
+        assert nodes_obj.nodes[-1].name == "典藏档案"
+
+    def test_forward_unsupported_platform_falls_back(self, plugin):
+        # 非 QQ 平台引用聊天记录 → 回退 [转发消息] 占位符
+        reply = make_reply(chain=[Forward(id="fwd-1")], message_str="")
+        event = make_reply_event(reply, platform_name="webchat")
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.text == "[转发消息]"
+        assert q.forward_nodes == []
 
 
 class TestConfig:
