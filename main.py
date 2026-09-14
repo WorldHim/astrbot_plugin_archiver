@@ -628,6 +628,7 @@ class ArchiverPlugin(Star):
         else:
             yield event.plain_result(
                 f"已收录「{sender_name}」的发言，本会话典库共 {count} 条"
+                f"（编号：{self._quote_code(quote)}）"
             )
 
     def _resolve_owner_target(
@@ -834,6 +835,41 @@ class ArchiverPlugin(Star):
                     return m.group(1).lower()
         return None
 
+    def _resolve_reply_text_code(self, reply: Reply) -> str | None:
+        """从被回复消息回填的内容(Reply.chain/message_str)中解析典编号。
+
+        适配器回复普通消息时会回填被回复消息的内容,典消息末尾收录信息
+        含"编号:xxx"(文本回执与合并转发收录信息均嵌入编号)。纯本地解析,
+        不依赖任何平台接口。
+        """
+        pattern = re.compile(r"编号[:：]\s*([0-9a-f]{4,32})", re.IGNORECASE)
+
+        def find_in_text(text: str) -> str | None:
+            m = pattern.search(str(text or ""))
+            return m.group(1).lower() if m else None
+
+        # 1) Reply.chain:Plain 段与 Node/Nodes 的 content
+        for comp in getattr(reply, "chain", None) or []:
+            ctype = getattr(comp, "type", None)
+            if ctype == ComponentType.Plain:
+                code = find_in_text(getattr(comp, "text", ""))
+                if code:
+                    return code
+            elif ctype in (ComponentType.Node, ComponentType.Nodes):
+                nodes = (
+                    [comp]
+                    if ctype == ComponentType.Node
+                    else getattr(comp, "nodes", []) or []
+                )
+                for node in nodes:
+                    for seg in getattr(node, "content", None) or []:
+                        if getattr(seg, "type", None) == ComponentType.Plain:
+                            code = find_in_text(getattr(seg, "text", ""))
+                            if code:
+                                return code
+        # 2) message_str:被回复消息的纯文本表示
+        return find_in_text(str(getattr(reply, "message_str", "") or ""))
+
     @filter.command("删典", alias={"删除典"})
     async def shandian(self, event: AstrMessageEvent, code: str = ""):
         """回复典消息或被收录的原消息发送 /删典 删除;也可 /删典 <编号>"""
@@ -855,10 +891,16 @@ class ArchiverPlugin(Star):
             quote_id = self._storage.find_quote_id_by_sent_message(umo, reply_id)
             if quote_id:
                 quote = self._storage.get_quote_by_id(umo, quote_id)
-            # 2) 被收录的原始消息(回复原消息删除,按原消息 ID 查找)
+            # 2) 被回复消息回填内容中的编号(适配器回填 Reply.chain/message_str,
+            #    文本回执与合并转发收录信息均嵌入编号;纯本地解析)
+            if quote is None:
+                text_code = self._resolve_reply_text_code(reply)
+                if text_code:
+                    quote = self._storage.find_quote_by_id_prefix(text_code)
+            # 3) 被收录的原始消息(回复原消息删除,按原消息 ID 查找)
             if quote is None:
                 quote = self._storage.find_quote_by_message_id(umo, reply_id)
-            # 3) 回退:get_forward_msg 解析收录信息节点编号(旧典消息)
+            # 4) 回退:get_forward_msg 解析收录信息节点编号(旧典消息)
             if quote is None and reply is not None:
                 resolved = await self._resolve_reply_quote_id(event, reply)
                 if resolved:

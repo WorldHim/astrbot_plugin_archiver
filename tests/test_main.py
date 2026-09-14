@@ -643,6 +643,23 @@ class TestShandian:
             is None
         )
 
+    def test_delete_by_reply_text_receipt(self, tmp_path):
+        # 文本回执(use_forward=False)也嵌入编号 → 回复文本回执删除
+        plugin = _plugin_with_config(tmp_path, {"use_forward": False})
+        event = make_reply_event(make_reply())
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        # 回复 bot 的文本回执(内容含编号),适配器回填到 Reply.chain/message_str
+        receipt = (
+            f"已收录「张三」的发言，本会话典库共 1 条（编号：{q.id[:8]}）"
+        )
+        del_event = FakeEvent(
+            message=[make_reply(id="text-1", chain=[Plain(receipt)], message_str=receipt)]
+        )
+        results = collect(plugin.shandian(del_event))
+        assert "已删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
     def test_delete_by_reply_original_message(self, plugin):
         # 回复被收录的原始消息 → 按原消息 ID(message_id)查找并删除
         event = make_reply_event(
