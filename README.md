@@ -45,7 +45,8 @@ Bot：[聊天记录] 张三：今天天气真好
 
 # 数据存储
 
-- 典库以 JSON 形式保存在 `data/plugin_data/astrbot_plugin_archiver/quotes.json`，按会话（群聊/私聊）分组。写入采用「临时文件 + 原子替换」，并保留上一版备份（`quotes.json.bak`），主文件意外缺失/损坏时自动从备份恢复。
+- 典库数据以 **SQLite 数据库**形式持久化保存在 `data/plugin_data/astrbot_plugin_archiver/quotes.db`，按会话（群聊/私聊）分组，开启 WAL 模式、事务性写入，为会话与归属（QQ 号）建索引。
+- **自动迁移**：首次运行检测到旧版 `quotes.json` 时自动导入 SQLite，原文件重命名为 `quotes.json.migrated` 保留。
 - 被收录的图片会**下载保存到本地** `data/plugin_data/astrbot_plugin_archiver/images/`，文件名取内容摘要（相同内容自动复用同一文件）；超过 `image_compress_threshold_mb` 的图片会自动压缩（带透明通道转 WebP、兜底 PNG，其余转 JPEG，必要时等比缩小），压缩后原图文件会被清理。动图（GIF 等）不做有损压缩以避免丢帧，原样保存。
 
 # 说明

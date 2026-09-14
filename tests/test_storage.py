@@ -26,75 +26,79 @@ class TestRoundtrip:
         assert storage.session_count(UMO_GROUP) == 1
         assert storage.session_count(UMO_OTHER) == 1
 
-    def test_json_structure(self, storage):
+    def test_db_structure(self, storage):
         storage.add_quote(UMO_GROUP, make_quote())
-        raw = json.loads(storage._quotes_file.read_text(encoding="utf-8"))
-        assert raw["version"] == 1
-        assert raw["sessions"][UMO_GROUP][0]["sender_name"] == "张三"
+        assert storage._db_file.is_file()
+        import sqlite3
 
-    def test_utf8_bom_readable(self, storage):
-        # Windows 记事本等工具保存的 UTF-8 with BOM 文件须能正常读取
-        storage.add_quote(UMO_GROUP, make_quote())
-        raw_bytes = storage._quotes_file.read_bytes()
-        storage._quotes_file.write_bytes(b"\xef\xbb\xbf" + raw_bytes)
-        os.utime(storage._quotes_file, (time.time() + 10, time.time() + 10))
-        data = storage.load_quotes()
-        assert data[UMO_GROUP][0].text == "哈哈哈哈"
-
-
-class TestAtomicAndBackup:
-    def test_atomic_no_tmp_left(self, storage):
-        storage.add_quote(UMO_GROUP, make_quote())
-        assert not storage._quotes_file.with_suffix(".json.tmp").exists()
-
-    def test_second_save_creates_bak_with_previous_version(self, storage):
-        storage.add_quote(UMO_GROUP, make_quote(message_id="m1"))
-        storage.add_quote(UMO_GROUP, make_quote(message_id="m2"))
-        bak = storage._quotes_file.with_suffix(".json.bak")
-        assert bak.exists()
-        data = json.loads(bak.read_text(encoding="utf-8"))
-        # 备份保留上一版(只有第一条)
-        assert len(data["sessions"][UMO_GROUP]) == 1
-
-    def test_corrupted_main_restored_from_bak(self, storage):
-        storage.add_quote(UMO_GROUP, make_quote(message_id="m1"))
-        storage.add_quote(UMO_GROUP, make_quote(message_id="m2"))
-        storage._quotes_file.write_text("bad", encoding="utf-8")
-        os.utime(storage._quotes_file, (time.time() + 10, time.time() + 10))
-        loaded = storage.load_quotes()
-        # 主文件损坏 → 从备份恢复上一版(1 条)
-        assert storage.session_count(UMO_GROUP) == 1
-
-    def test_missing_main_restored_from_bak(self, storage):
-        storage.add_quote(UMO_GROUP, make_quote(message_id="m1"))
-        storage.add_quote(UMO_GROUP, make_quote(message_id="m2"))
-        storage._quotes_file.unlink()
-        loaded = storage.load_quotes()
-        assert storage.session_count(UMO_GROUP) == 1
-        # 恢复结果进入缓存,再次 load 命中同一对象
-        assert storage.load_quotes() is loaded
-
-    def test_failed_save_keeps_old_data(self, storage):
-        storage.add_quote(UMO_GROUP, make_quote(message_id="m1"))
-        import pathlib
-
-        original_replace = pathlib.Path.replace
-
-        def broken_replace(self, target):
-            raise OSError("disk full")
-
-        pathlib.Path.replace = broken_replace
+        conn = sqlite3.connect(storage._db_file)
         try:
-            storage.add_quote(UMO_GROUP, make_quote(message_id="m2"))
+            rows = conn.execute(
+                "SELECT sender_name, text FROM quotes WHERE session = ?",
+                (UMO_GROUP,),
+            ).fetchall()
         finally:
-            pathlib.Path.replace = original_replace
-        # 保存失败 → 磁盘上仍是旧数据
-        assert storage.session_count(UMO_GROUP) == 1
+            conn.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "张三"
+        assert rows[0][1] == "哈哈哈哈"
 
-class TestCache:
-    def test_cache_hit_same_object(self, storage):
+    def test_legacy_json_migrated(self, storage):
+        # 旧版 quotes.json(含 BOM)在存储实例初始化时自动迁移进 SQLite
+        import sqlite3
+
+        legacy = {
+            "version": 1,
+            "updated_at_ts": 1789365419.0,
+            "sessions": {
+                UMO_GROUP: [make_quote(message_id="legacy-1").to_dict()]
+            },
+        }
+        storage._legacy_json.write_bytes(
+            b"\xef\xbb\xbf"
+            + json.dumps(legacy, ensure_ascii=False).encode("utf-8")
+        )
+        # 重新实例化触发迁移
+        from astrbot_plugin_archiver.storage import QuoteStorage
+
+        migrated = QuoteStorage("astrbot_plugin_archiver")
+        assert migrated.session_count(UMO_GROUP) == 1  # 迁移 1 条
+        quotes = migrated.session_quotes(UMO_GROUP)
+        assert any(q.message_id == "legacy-1" for q in quotes)
+        # 原 JSON 文件重命名保留,避免重复导入
+        assert not storage._legacy_json.exists()
+        assert storage._legacy_json.with_suffix(".json.migrated").exists()
+        conn = sqlite3.connect(storage._db_file)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 1
+
+
+class TestDurability:
+    def test_db_file_created(self, storage):
+        # 典库以 SQLite 数据库形式持久化,重启/重载后数据仍在
         storage.add_quote(UMO_GROUP, make_quote())
-        assert storage.load_quotes() is storage.load_quotes()
+        assert storage._db_file.is_file()
+        from astrbot_plugin_archiver.storage import QuoteStorage
+
+        reloaded = QuoteStorage("astrbot_plugin_archiver")
+        assert reloaded.session_count(UMO_GROUP) == 1
+        assert reloaded.session_quotes(UMO_GROUP)[0].text == "哈哈哈哈"
+
+    def test_transaction_rollback_keeps_old_data(self, storage):
+        # 写入失败(约束冲突回滚) → 磁盘上仍是旧数据
+        storage.add_quote(UMO_GROUP, make_quote(message_id="m1"))
+        broken = make_quote(message_id="m2")
+        broken.id = None  # 触发 NOT NULL 约束失败 → 事务回滚
+        try:
+            storage.add_quote(UMO_GROUP, broken)
+        except Exception:
+            pass
+        assert storage.session_count(UMO_GROUP) == 1
+        assert storage.has_message(UMO_GROUP, "m1") is True
+        assert storage.has_message(UMO_GROUP, "m2") is False
 
     def test_save_refreshes_cache(self, storage):
         storage.add_quote(UMO_GROUP, make_quote(message_id="m1"))

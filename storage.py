@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-import shutil
-import time
+import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -112,32 +112,172 @@ class Quote:
 
 
 class QuoteStorage:
-    """典库存储:按会话(unified_msg_origin)分组的 JSON 文件。
+    """典库存储:SQLite 数据库持久化。
 
-    - 数据目录: data/plugin_data/{plugin_name}/quotes.json
-    - 原子写: 先写临时文件再 replace,避免写一半崩溃导致文件损坏
-    - 备份: 每次保存前轮转保留上一版(quotes.json.bak),主文件缺失/损坏时自动恢复
-    - 缓存: 基于 mtime 的内存缓存,文件未变化时直接返回缓存对象
+    - 数据库: data/plugin_data/{plugin_name}/quotes.db(WAL 模式,事务性写入)
+    - 自动迁移: 首次运行检测旧版 quotes.json → 导入数据库 → 重命名为
+      quotes.json.migrated 保留原文件
+    - 索引: 按会话(session)与归属(sender_id)建索引,按人抽取高效
+    - 每次操作使用独立连接并自动提交,无共享连接状态
     """
+
+    _FIELDS = (
+        "id",
+        "session",
+        "message_id",
+        "sender_id",
+        "sender_name",
+        "text",
+        "images",
+        "forward_nodes",
+        "archived_by",
+        "archived_by_name",
+        "archived_at_ts",
+    )
 
     def __init__(self, plugin_name: str):
         self._plugin_name = plugin_name
         self._base_dir = StarTools.get_data_dir(plugin_name)
-        self._quotes_file = self._base_dir / "quotes.json"
+        self._db_file = self._base_dir / "quotes.db"
+        self._legacy_json = self._base_dir / "quotes.json"
         self._images_dir = self._base_dir / "images"
-        # (主文件 mtime, 数据)——文件未变化时 load 直接返回缓存
-        self._cache: tuple[float, dict[str, list[Quote]]] | None = None
 
         self._base_dir.mkdir(parents=True, exist_ok=True)
         self._images_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---------- 读写 ----------
+        self._init_db()
+        self._migrate_from_json()
+
+    # ---------- 连接与建表 ----------
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_file)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    @contextmanager
+    def _db(self):
+        """独立的数据库连接上下文:with 块内自动提交,异常自动回滚。"""
+        conn = self._connect()
+        try:
+            with conn:  # 事务上下文
+                yield conn
+        finally:
+            conn.close()
+
+    def _init_db(self) -> None:
+        with self._db() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quotes (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    session TEXT NOT NULL,
+                    message_id TEXT NOT NULL DEFAULT '',
+                    sender_id TEXT NOT NULL DEFAULT '',
+                    sender_name TEXT NOT NULL DEFAULT '',
+                    text TEXT NOT NULL DEFAULT '',
+                    images TEXT NOT NULL DEFAULT '[]',
+                    forward_nodes TEXT NOT NULL DEFAULT '[]',
+                    archived_by TEXT NOT NULL DEFAULT '',
+                    archived_by_name TEXT NOT NULL DEFAULT '',
+                    archived_at_ts REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quotes_session ON quotes(session)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quotes_session_sender "
+                "ON quotes(session, sender_id)"
+            )
+
+    # ---------- 旧版 JSON 迁移 ----------
+
+    def _migrate_from_json(self) -> None:
+        """将旧版 quotes.json 导入 SQLite;完成后重命名为 .migrated 保留。"""
+        if not self._legacy_json.exists():
+            return
+        try:
+            data = self._read_json(self._legacy_json)
+        except Exception as e:
+            logger.error(f"[archiver] Failed to migrate legacy quotes.json: {e}")
+            return
+        total = 0
+        try:
+            with self._db() as conn:
+                for umo, quotes in data.items():
+                    for q in quotes:
+                        conn.execute(
+                            self._insert_sql("IGNORE"), self._quote_params(q)
+                        )
+                        total += 1
+        except Exception as e:
+            logger.error(f"[archiver] Failed to import legacy quotes.json: {e}")
+            return
+        # 迁移完成,重命名保留原文件,避免下次重复导入
+        migrated = self._legacy_json.with_suffix(".json.migrated")
+        try:
+            self._legacy_json.replace(migrated)
+        except OSError as e:
+            logger.warning(f"[archiver] Failed to rename legacy quotes.json: {e}")
+        if total:
+            logger.info(
+                f"[archiver] Migrated {total} quotes from quotes.json to SQLite"
+            )
+
+    # ---------- 行转换 ----------
+
+    def _quote_params(self, quote: Quote, session: str | None = None) -> tuple:
+        d = quote.to_dict()
+        if session is not None:
+            d["session"] = session
+        return (
+            d["id"],
+            d["session"],
+            d["message_id"],
+            d["sender_id"],
+            d["sender_name"],
+            d["text"],
+            json.dumps(d["images"], ensure_ascii=False),
+            json.dumps(d["forward_nodes"], ensure_ascii=False),
+            d["archived_by"],
+            d["archived_by_name"],
+            d["archived_at_ts"],
+        )
+
+    def _insert_sql(self, mode: str) -> str:
+        fields = ", ".join(self._FIELDS)
+        placeholders = ", ".join("?" for _ in self._FIELDS)
+        return f"INSERT OR {mode} INTO quotes ({fields}) VALUES ({placeholders})"
+
+    def _row_to_quote(self, row) -> Quote:
+        data = dict(row)
+        data["images"] = json.loads(data.get("images") or "[]")
+        data["forward_nodes"] = json.loads(data.get("forward_nodes") or "[]")
+        return Quote.from_dict(data)
+
+    def _rows_to_quotes(self, rows) -> list[Quote]:
+        quotes: list[Quote] = []
+        for row in rows:
+            try:
+                quotes.append(self._row_to_quote(row))
+            except Exception as e:
+                logger.warning(f"[archiver] skip invalid quote row: {e}")
+        return quotes
+
+    # ---------- 旧版 JSON 解析(仅用于迁移) ----------
 
     def _read_json(self, path: Path) -> dict[str, list[Quote]]:
-        """解析典库文件;编码使用 utf-8-sig 以兼容带 BOM 的手工编辑文件。"""
+        """解析旧版典库 JSON;兼容 {sessions:{...}} 与扁平 {umo:[...]} 两种
+        历史格式,编码使用 utf-8-sig 以兼容带 BOM 的手工编辑文件。"""
         raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        sessions_raw = raw.get("sessions")
+        if not isinstance(sessions_raw, dict):
+            sessions_raw = raw  # 兼容旧版扁平结构
         sessions: dict[str, list[Quote]] = {}
-        for umo, quotes in (raw.get("sessions") or {}).items():
+        for umo, quotes in sessions_raw.items():
             if not isinstance(quotes, list):
                 continue
             parsed: list[Quote] = []
@@ -145,108 +285,84 @@ class QuoteStorage:
                 if not isinstance(item, dict):
                     continue
                 try:
+                    item = dict(item)
+                    item.setdefault("session", str(umo))
                     parsed.append(Quote.from_dict(item))
                 except Exception as e:
                     logger.warning(f"[archiver] skip invalid quote in {umo}: {e}")
             sessions[str(umo)] = parsed
         return sessions
 
+    # ---------- 典库操作(SQLite) ----------
+
     def load_quotes(self) -> dict[str, list[Quote]]:
-        """加载全部典库;带 mtime 内存缓存,主文件缺失/损坏时回退备份文件。"""
-        try:
-            mtime: float | None = self._quotes_file.stat().st_mtime
-        except OSError:
-            mtime = None
-
-        cached = self._cache
-        if cached is not None and cached[0] == mtime:
-            return cached[1]
-
-        data: dict[str, list[Quote]] | None = None
-        if mtime is not None:
-            try:
-                data = self._read_json(self._quotes_file)
-            except Exception as e:
-                logger.error(f"[archiver] Failed to load quotes.json: {e}")
-        if data is None:
-            # 主文件缺失或损坏 → 尝试从上一版备份恢复
-            bak_path = self._quotes_file.with_suffix(".json.bak")
-            if bak_path.exists():
-                try:
-                    data = self._read_json(bak_path)
-                    logger.warning(
-                        "[archiver] quotes.json missing/corrupted, restored from backup"
-                    )
-                except Exception as e:
-                    logger.error(f"[archiver] Failed to load backup file: {e}")
-        if data is None:
-            data = {}
-
-        # 恢复结果同样进入缓存(mtime=None 时缓存主文件缺失状态;
-        # 之后文件一旦出现,mtime 变化即自动失效重读)
-        self._cache = (mtime, data)
+        """加载全部典库(按插入顺序,按会话分组)。"""
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM quotes ORDER BY rowid"
+            ).fetchall()
+        data: dict[str, list[Quote]] = {}
+        for q in self._rows_to_quotes(rows):
+            data.setdefault(q.session, []).append(q)
         return data
 
     def save_quotes(self, data: dict[str, list[Quote]]) -> None:
-        payload = {
-            "version": 1,
-            "updated_at_ts": time.time(),
-            "sessions": {
-                umo: [q.to_dict() for q in quotes] for umo, quotes in data.items()
-            },
-        }
-        tmp_path = self._quotes_file.with_suffix(".json.tmp")
-        bak_path = self._quotes_file.with_suffix(".json.bak")
-        try:
-            tmp_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            # 轮转备份:保留上一版数据,供主文件损坏时恢复
-            if self._quotes_file.exists():
-                shutil.copyfile(self._quotes_file, bak_path)
-            # 临时文件 + replace 原子写,避免写一半崩溃导致文件损坏
-            tmp_path.replace(self._quotes_file)
-            # 保存成功,同步刷新内存缓存(省一次回读)
-            try:
-                self._cache = (self._quotes_file.stat().st_mtime, dict(data))
-            except OSError:
-                self._cache = None
-        except Exception as e:
-            logger.error(f"[archiver] Failed to save quotes.json: {e}")
-            # 保存失败时缓存状态不确定,置空强制下次重读
-            self._cache = None
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    # ---------- 典库操作 ----------
+        """以替换方式写入全部典库(兼容旧接口)。"""
+        with self._db() as conn:
+            conn.execute("DELETE FROM quotes")
+            for umo, quotes in data.items():
+                for q in quotes:
+                    conn.execute(self._insert_sql("REPLACE"), self._quote_params(q))
 
     def session_quotes(self, umo: str) -> list[Quote]:
-        """某会话的全部典。"""
-        return self.load_quotes().get(umo, [])
+        """某会话的全部典(按收录顺序)。"""
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM quotes WHERE session = ? ORDER BY rowid", (umo,)
+            ).fetchall()
+        return self._rows_to_quotes(rows)
 
     def session_count(self, umo: str) -> int:
         """某会话的典数。"""
-        return len(self.session_quotes(umo))
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM quotes WHERE session = ?", (umo,)
+            ).fetchone()
+        return int(row["n"]) if row is not None else 0
 
     def has_message(self, umo: str, message_id: str) -> bool:
         """按原消息 ID 判断某条消息是否已被收录(用于去重);空 ID 不参与去重。"""
         if not message_id:
             return False
-        return any(q.message_id == message_id for q in self.session_quotes(umo))
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM quotes WHERE session = ? AND message_id = ? LIMIT 1",
+                (umo, message_id),
+            ).fetchone()
+        return row is not None
 
     def add_quote(self, umo: str, quote: Quote, limit: int = 0) -> int:
         """收录一条典;超出 limit(>0)时淘汰最早的典。返回收录后本会话的典数。"""
-        data = self.load_quotes()
-        # 拷贝一份再改,避免直接修改缓存对象
-        quotes = list(data.get(umo, []))
-        quotes.append(quote)
-        if isinstance(limit, int) and limit > 0:
-            quotes = quotes[-limit:]
-        data[umo] = quotes
-        self.save_quotes(data)
-        return len(quotes)
+        with self._db() as conn:
+            # 按 add_quote 的 umo 参数归组(与旧版 JSON 行为一致)
+            conn.execute(
+                self._insert_sql("REPLACE"), self._quote_params(quote, session=umo)
+            )
+            if isinstance(limit, int) and limit > 0:
+                # 保留本会话最新的 limit 条,淘汰更早的
+                conn.execute(
+                    """
+                    DELETE FROM quotes WHERE session = ? AND id NOT IN (
+                        SELECT id FROM quotes WHERE session = ?
+                        ORDER BY rowid DESC LIMIT ?
+                    )
+                    """,
+                    (umo, umo, limit),
+                )
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM quotes WHERE session = ?", (umo,)
+            ).fetchone()
+        return int(row["n"]) if row is not None else 0
 
     def random_quote(self, umo: str) -> Quote | None:
         """从某会话的典库中随机抽取一条;典库为空时返回 None。"""
