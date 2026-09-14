@@ -604,6 +604,155 @@ class TestOwner:
         assert results[0][1][0].nodes[0].name == "李四"
 
 
+class TestShandian:
+    def test_sent_message_recorded_via_platform_api(self, plugin):
+        # QQ 平台直接调用平台 API 发送典消息 → 记录映射,回执不经框架输出
+        responses = {
+            **TestForward.FORWARD_RESPONSES,
+            "send_group_forward_msg": {"data": {"message_id": "sent-100"}},
+        }
+        event = make_reply_event(make_reply(), bot_responses=responses)
+        results = collect(plugin.rudian(event))
+        assert results == []  # 直接平台发送,无框架输出
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        # 映射已记录:典消息 message_id → 典
+        assert (
+            plugin._storage.find_quote_id_by_sent_message(UMO_GROUP, "sent-100")
+            == q.id
+        )
+
+    def test_delete_by_sent_mapping(self, plugin):
+        # 回复 bot 发送的典消息 → 按映射精确删除(不依赖 get_forward_msg)
+        q = make_quote()
+        plugin._storage.add_quote(UMO_GROUP, q)
+        plugin._storage.record_sent_message(UMO_GROUP, "sent-200", q.id)
+        event = FakeEvent(message=[make_reply(id="sent-200", chain=[])])
+        results = collect(plugin.shandian(event))
+        assert "已删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
+    def test_delete_cleans_sent_mapping(self, plugin):
+        # 删除典后映射记录同步清理
+        q = make_quote()
+        plugin._storage.add_quote(UMO_GROUP, q)
+        plugin._storage.record_sent_message(UMO_GROUP, "sent-300", q.id)
+        plugin._storage.delete_quote(UMO_GROUP, q.id)
+        plugin._storage.delete_sent_message(UMO_GROUP, q.id)
+        assert (
+            plugin._storage.find_quote_id_by_sent_message(UMO_GROUP, "sent-300")
+            is None
+        )
+
+    def test_delete_by_reply(self, plugin):
+        # 收录 → 回执含编号 → 回复典消息(get_forward_msg 返回含编号文本) → /删典
+        event = make_reply_event(
+            make_reply(),
+            bot_responses={
+                "get_forward_msg": {
+                    "data": {
+                        "messages": [
+                            {
+                                "sender": {"nickname": "张三", "user_id": "20002"},
+                                "message": [
+                                    {
+                                        "type": "text",
+                                        "data": {"text": "哈哈哈哈"},
+                                    }
+                                ],
+                            },
+                            {
+                                "sender": {"nickname": "入典成功"},
+                                "message": [
+                                    {
+                                        "type": "text",
+                                        "data": {"text": "已收录，本会话典库共 1 条（编号：abcdef12）"},
+                                    }
+                                ],
+                            },
+                        ]
+                    }
+                }
+            },
+        )
+        results = collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q is not None
+        # 回复 bot 发送的典消息(Reply.id 为合并转发消息 ID)
+        del_event = FakeEvent(
+            message=[make_reply(id="sent-1", chain=[])],
+            bot_responses={
+                "get_forward_msg": {
+                    "data": {
+                        "messages": [
+                            {
+                                "sender": {"nickname": "入典成功"},
+                                "message": [
+                                    {
+                                        "type": "text",
+                                        "data": {
+                                            "text": "已收录，本会话典库共 1 条（编号："
+                                            + q.id[:8]
+                                            + "）"
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        results2 = collect(plugin.shandian(del_event))
+        assert results2[0][0] == "plain"
+        assert "已删除" in results2[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
+    def test_delete_by_code(self, plugin):
+        # /删典 <编号> → 直接删除
+        q = make_quote()
+        plugin._storage.add_quote(UMO_GROUP, q)
+        event = FakeEvent(message=[])
+        results = collect(plugin.shandian(event, q.id[:8]))
+        assert "已删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
+    def test_delete_code_not_found(self, plugin):
+        plugin._storage.add_quote(UMO_GROUP, make_quote())
+        event = FakeEvent(message=[])
+        results = collect(plugin.shandian(event, "ffffffff"))
+        assert "没有找到" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 1
+
+    def test_delete_no_target(self, plugin):
+        # 既未回复典消息也无编号 → 使用提示
+        event = FakeEvent(message=[])
+        results = collect(plugin.shandian(event))
+        assert "请回复" in results[0][1] or "编号" in results[0][1]
+
+    def test_reply_not_a_quote_message(self, plugin):
+        # 回复的消息拉不到编号(非典消息) → 提示
+        event = make_reply_event(
+            make_reply(id="sent-2", chain=[]),
+            bot_responses={
+                "get_forward_msg": {
+                    "data": {
+                        "messages": [
+                            {
+                                "sender": {"nickname": "张三"},
+                                "message": [
+                                    {"type": "text", "data": {"text": "普通消息"}}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        results = collect(plugin.shandian(event))
+        assert results[0][0] == "plain"
+        assert "请回复" in results[0][1] or "编号" in results[0][1]
+
+
 class TestConfig:
     def test_defaults_without_config(self, plugin):
         assert plugin._cfg_bool("fallback_global", False) is False

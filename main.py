@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 
@@ -503,7 +504,7 @@ class ArchiverPlugin(Star):
 
     @staticmethod
     def _archive_info_text(quote: Quote) -> str:
-        """由典藏记录生成收录信息文本(收录人/收录时间);无信息时返回空串。"""
+        """由典藏记录生成收录信息文本(收录人/收录时间/编号);无信息时返回空串。"""
         parts: list[str] = []
         by = str(quote.archived_by_name or "").strip()
         if by:
@@ -515,7 +516,13 @@ class ArchiverPlugin(Star):
                     "%Y-%m-%d %H:%M", time.localtime(quote.archived_at_ts)
                 )
             )
+        if quote.id:
+            parts.append(f"编号：{quote.id[:8]}")
         return "\n".join(parts)
+
+    def _quote_code(self, quote: Quote) -> str:
+        """典的展示编号(ID 前 8 位)。"""
+        return str(quote.id or "")[:8]
 
     # ---------- 指令 ----------
 
@@ -593,16 +600,30 @@ class ArchiverPlugin(Star):
                 # 聊天记录:原样回显引用的聊天记录,最后一条为收录信息
                 nodes: list = self._build_forward_quote_nodes(
                     quote,
-                    info_text=f"已收录，本会话典库共 {count} 条",
+                    info_text=(
+                        f"已收录，本会话典库共 {count} 条"
+                        f"（编号：{self._quote_code(quote)}）"
+                    ),
                 )
             else:
                 nodes = [self._quote_node(quote)]
                 nodes.append(
                     Node(
-                        content=[Plain(f"已收录，本会话典库共 {count} 条")],
+                        content=[
+                            Plain(
+                                f"已收录，本会话典库共 {count} 条"
+                                f"（编号：{self._quote_code(quote)}）"
+                            )
+                        ],
                         name="入典成功",
                     )
                 )
+            # QQ 平台直接调用平台 API 发送并记录典消息映射(回复删典用)
+            sent_ids = await self._send_forward_nodes(event, nodes)
+            if sent_ids is not None:
+                self._record_sent(event, sent_ids, quote)
+                return
+            # 非 QQ 平台/发送失败 → 回退框架发送
             yield event.chain_result([Nodes(nodes=nodes)])
         else:
             yield event.plain_result(
@@ -671,6 +692,11 @@ class ArchiverPlugin(Star):
                 info = self._archive_info_text(quote)
                 if info:
                     nodes.append(Node(content=[Plain(info)], name="典藏档案"))
+            # QQ 平台直接调用平台 API 发送并记录典消息映射(回复删典用)
+            sent_ids = await self._send_forward_nodes(event, nodes)
+            if sent_ids is not None:
+                self._record_sent(event, sent_ids, quote)
+                return
             yield event.chain_result([Nodes(nodes=nodes)])
             return
 
@@ -684,6 +710,164 @@ class ArchiverPlugin(Star):
             if comp is not None:
                 chain.append(comp)
         yield event.chain_result(chain)
+
+    async def _send_forward_nodes(
+        self, event: AstrMessageEvent, nodes: list
+    ) -> list[str] | None:
+        """直接调用 QQ 平台 API 发送合并转发,返回平台返回的 message_id 列表。
+
+        记录典消息与典的映射后,回复典消息删除时可精确定位。
+        非 QQ 平台、无 bot 接口或发送失败时返回 None(调用方回退框架发送)。
+        """
+        platform = str(event.get_platform_name() or "").strip().lower()
+        if platform != "aiocqhttp":
+            return None
+        bot = getattr(event, "bot", None)
+        call_action = getattr(getattr(bot, "api", None), "call_action", None)
+        if not callable(call_action):
+            return None
+        umo = str(event.unified_msg_origin or "")
+        parts = umo.split(":")
+        if len(parts) < 3 or not parts[2]:
+            return None
+        message_type = parts[1]
+        session_id = parts[2]
+        try:
+            payload = await Nodes(nodes=nodes).to_dict()
+            if "group" in message_type.lower():
+                payload["group_id"] = session_id
+                ret = await call_action(
+                    "send_group_forward_msg", **payload
+                )
+            else:
+                payload["user_id"] = session_id
+                ret = await call_action(
+                    "send_private_forward_msg", **payload
+                )
+        except Exception as e:
+            logger.warning(
+                f"[archiver] send forward via platform api failed: {e}"
+            )
+            return None
+        if not isinstance(ret, dict):
+            return None
+        data = ret.get("data")
+        if not isinstance(data, dict):
+            data = ret
+        message_id = str(data.get("message_id") or "").strip()
+        return [message_id] if message_id else None
+
+    def _record_sent(
+        self, event: AstrMessageEvent, sent_ids: list[str] | None, quote: Quote
+    ) -> None:
+        """记录已发送典消息与典的映射(删除时精确定位)。"""
+        if not sent_ids:
+            return
+        umo = str(event.unified_msg_origin or "")
+        for mid in sent_ids:
+            self._storage.record_sent_message(umo, mid, quote.id)
+
+    async def _resolve_reply_quote_id(
+        self, event: AstrMessageEvent, reply: Reply
+    ) -> str | None:
+        """从被回复的典消息(本 bot 发送的合并转发)解析典编号。
+
+        通过 get_forward_msg 拉取合并转发内容,解析收录信息节点中的
+        "编号:xxx";仅 aiocqhttp(QQ)平台支持,失败返回 None。
+        """
+        platform = str(event.get_platform_name() or "").strip().lower()
+        if platform != "aiocqhttp":
+            return None
+        bot = getattr(event, "bot", None)
+        call_action = getattr(getattr(bot, "api", None), "call_action", None)
+        if not callable(call_action):
+            return None
+        reply_id = str(getattr(reply, "id", "") or "").strip()
+        if not reply_id:
+            return None
+
+        payload = None
+        try:
+            payload = await call_action(
+                "get_forward_msg", message_id=reply_id
+            )
+        except Exception:
+            try:
+                payload = await call_action("get_forward_msg", id=reply_id)
+            except Exception as e:
+                logger.warning(
+                    f"[archiver] get_forward_msg failed for {reply_id}: {e}"
+                )
+                return None
+        if not isinstance(payload, dict):
+            return None
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            data = payload
+        messages = (
+            data.get("messages") or data.get("message") or data.get("nodes")
+        )
+        if not isinstance(messages, list):
+            return None
+        # 在子消息文本中查找收录信息节点的"编号:xxx"
+        pattern = re.compile(r"编号[:：]\s*([0-9a-f]{4,32})", re.IGNORECASE)
+        for node in messages:
+            if not isinstance(node, dict):
+                continue
+            raw = node.get("message") or node.get("content") or []
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (TypeError, ValueError):
+                    raw = [{"type": "text", "data": {"text": raw}}]
+            for seg in raw if isinstance(raw, list) else []:
+                if not isinstance(seg, dict):
+                    continue
+                seg_data = seg.get("data")
+                text = str(
+                    (seg_data or {}).get("text", "")
+                    if isinstance(seg_data, dict)
+                    else ""
+                )
+                m = pattern.search(text)
+                if m:
+                    return m.group(1).lower()
+        return None
+
+    @filter.command("删典", alias={"删除典"})
+    async def shandian(self, event: AstrMessageEvent, code: str = ""):
+        """回复本 bot 发送的典消息发送 /删典 删除该典;也可 /删典 <编号>"""
+        reply = self._find_reply(event)
+        code = str(code or "").strip()
+        reply_id = str(getattr(reply, "id", "") or "").strip() if reply is not None else ""
+        umo = str(event.unified_msg_origin or "")
+        if not code and reply_id:
+            # 1) 优先查已发送典消息映射(发送时通过平台 API 记录,100% 可靠)
+            code = self._storage.find_quote_id_by_sent_message(umo, reply_id) or ""
+        if not code and reply is not None:
+            # 2) 回退:get_forward_msg 拉取回复的合并转发内容,解析收录信息节点编号
+            code = await self._resolve_reply_quote_id(event, reply) or ""
+        if not code:
+            yield event.plain_result(
+                "请回复本 bot 发送的典消息发送 /删典，"
+                "或使用 /删典 <编号> 删除（编号见典消息末尾收录信息）。"
+            )
+            return
+
+        quote = self._storage.find_quote_by_id_prefix(code)
+        if quote is None:
+            yield event.plain_result(f"没有找到编号为「{code}」的典。")
+            return
+
+        self._storage.delete_quote(quote.session, quote.id)
+        # 同步清理该典的已发送消息映射记录
+        self._storage.delete_sent_message(quote.session, quote.id)
+        logger.info(
+            f"[archiver] deleted quote {quote.id} from {quote.session}"
+        )
+        yield event.plain_result(
+            f"已删除「{quote.sender_name}」的典（编号：{self._quote_code(quote)}）。"
+        )
 
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""

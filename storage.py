@@ -192,6 +192,21 @@ class QuoteStorage:
                 "CREATE INDEX IF NOT EXISTS idx_quotes_session_sender "
                 "ON quotes(session, sender_id)"
             )
+            # 已发送典消息映射表:典消息 message_id → 典(回复典消息删除时精确定位)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sent_messages (
+                    message_id TEXT NOT NULL PRIMARY KEY,
+                    session TEXT NOT NULL,
+                    quote_id TEXT NOT NULL,
+                    sent_at REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sent_messages_session "
+                "ON sent_messages(session)"
+            )
 
     # ---------- 旧版 JSON 迁移 ----------
 
@@ -414,6 +429,80 @@ class QuoteStorage:
             if self._owner_matches(q, owner_id, owner_name)
         ]
         return random.choice(candidates) if candidates else None
+
+    def find_quote_by_id_prefix(self, prefix: str) -> Quote | None:
+        """按典 ID 前缀(编号)查找典;无匹配返回 None,多条取第一条。"""
+        prefix = str(prefix or "").strip().lower()
+        if not prefix:
+            return None
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM quotes WHERE id LIKE ? ORDER BY rowid LIMIT 2",
+                (prefix + "%",),
+            ).fetchall()
+        quotes = self._rows_to_quotes(rows)
+        return quotes[0] if quotes else None
+
+    def delete_quote(self, session: str, quote_id: str) -> bool:
+        """删除指定典;删除成功返回 True。"""
+        with self._db() as conn:
+            cur = conn.execute(
+                "DELETE FROM quotes WHERE session = ? AND id = ?",
+                (session, quote_id),
+            )
+        return cur.rowcount > 0
+
+    # ---------- 已发送典消息映射 ----------
+
+    _MAX_SENT_RECORDS = 1000
+
+    def record_sent_message(self, session: str, message_id: str, quote_id: str) -> None:
+        """记录已发送典消息(message_id)与典的映射,用于回复典消息删除。"""
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            return
+        with self._db() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO sent_messages
+                (message_id, session, quote_id, sent_at)
+                VALUES (?, ?, ?, strftime('%s','now') + 0.0)
+                """,
+                (message_id, session, quote_id),
+            )
+            # 限制映射表大小,淘汰最旧的记录
+            conn.execute(
+                """
+                DELETE FROM sent_messages WHERE message_id NOT IN (
+                    SELECT message_id FROM sent_messages
+                    ORDER BY sent_at DESC LIMIT ?
+                )
+                """,
+                (self._MAX_SENT_RECORDS,),
+            )
+
+    def find_quote_id_by_sent_message(
+        self, session: str, message_id: str
+    ) -> str | None:
+        """由已发送典消息的 message_id 查找对应典 ID;无记录返回 None。"""
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            return None
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT quote_id FROM sent_messages "
+                "WHERE session = ? AND message_id = ? LIMIT 1",
+                (session, message_id),
+            ).fetchone()
+        return str(row["quote_id"]) if row is not None else None
+
+    def delete_sent_message(self, session: str, quote_id: str) -> None:
+        """典被删除时清理其已发送消息映射记录。"""
+        with self._db() as conn:
+            conn.execute(
+                "DELETE FROM sent_messages WHERE session = ? AND quote_id = ?",
+                (session, quote_id),
+            )
 
     # ---------- 本地图片库 ----------
 

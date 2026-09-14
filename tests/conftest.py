@@ -99,6 +99,22 @@ def _install_astrbot_stubs():
             for k, v in kwargs.items():
                 setattr(self, k, v)
 
+        async def to_dict(self):
+            """模拟真实 Node.to_dict:转换为 OneBot node 段。"""
+            content = [
+                {"type": "text", "data": {"text": getattr(s, "text", "")}}
+                for s in getattr(self, "content", [])
+                if getattr(s, "type", None) == "Plain"
+            ]
+            return {
+                "type": "node",
+                "data": {
+                    "user_id": str(getattr(self, "uin", "0") or "0"),
+                    "nickname": getattr(self, "name", "") or "",
+                    "content": content,
+                },
+            }
+
     class _Nodes:
         type = _ComponentType.Nodes
 
@@ -106,6 +122,10 @@ def _install_astrbot_stubs():
             self.nodes = list(nodes)
             for k, v in kwargs.items():
                 setattr(self, k, v)
+
+        async def to_dict(self):
+            """模拟真实 Nodes.to_dict:转换为 OneBot JSON 格式。"""
+            return {"messages": [await n.to_dict() for n in getattr(self, "nodes", [])]}
 
     class _At:
         type = _ComponentType.At
