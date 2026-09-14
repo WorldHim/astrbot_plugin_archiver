@@ -643,6 +643,37 @@ class TestShandian:
             is None
         )
 
+    def test_delete_by_reply_original_message(self, plugin):
+        # 回复被收录的原始消息 → 按原消息 ID(message_id)查找并删除
+        event = make_reply_event(
+            make_reply(id="orig-1"),
+            bot_responses={
+                **TestForward.FORWARD_RESPONSES,
+                "send_group_forward_msg": {"data": {"message_id": "sent-100"}},
+            },
+        )
+        collect(plugin.rudian(event))
+        # 回复群友的原始消息(orig-1)删除,无需 bot 接口
+        del_event = FakeEvent(message=[make_reply(id="orig-1", chain=[])])
+        results = collect(plugin.shandian(del_event))
+        assert "已删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
+    def test_delete_by_reply_original_message_not_found(self, plugin):
+        # 回复的原始消息未被收录 → 提示
+        event = make_reply_event(
+            make_reply(id="orig-1"),
+            bot_responses={
+                **TestForward.FORWARD_RESPONSES,
+                "send_group_forward_msg": {"data": {"message_id": "sent-100"}},
+            },
+        )
+        collect(plugin.rudian(event))
+        del_event = FakeEvent(message=[make_reply(id="orig-999", chain=[])])
+        results = collect(plugin.shandian(del_event))
+        assert results[0][0] == "plain"
+        assert "请回复" in results[0][1] or "编号" in results[0][1]
+
     def test_delete_by_reply(self, plugin):
         # 收录 → 回执含编号 → 回复典消息(get_forward_msg 返回含编号文本) → /删典
         event = make_reply_event(

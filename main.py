@@ -836,27 +836,42 @@ class ArchiverPlugin(Star):
 
     @filter.command("删典", alias={"删除典"})
     async def shandian(self, event: AstrMessageEvent, code: str = ""):
-        """回复本 bot 发送的典消息发送 /删典 删除该典;也可 /删典 <编号>"""
+        """回复典消息或被收录的原消息发送 /删典 删除;也可 /删典 <编号>"""
         reply = self._find_reply(event)
         code = str(code or "").strip()
-        reply_id = str(getattr(reply, "id", "") or "").strip() if reply is not None else ""
+        reply_id = (
+            str(getattr(reply, "id", "") or "").strip()
+            if reply is not None
+            else ""
+        )
         umo = str(event.unified_msg_origin or "")
-        if not code and reply_id:
-            # 1) 优先查已发送典消息映射(发送时通过平台 API 记录,100% 可靠)
-            code = self._storage.find_quote_id_by_sent_message(umo, reply_id) or ""
-        if not code and reply is not None:
-            # 2) 回退:get_forward_msg 拉取回复的合并转发内容,解析收录信息节点编号
-            code = await self._resolve_reply_quote_id(event, reply) or ""
-        if not code:
-            yield event.plain_result(
-                "请回复本 bot 发送的典消息发送 /删典，"
-                "或使用 /删典 <编号> 删除（编号见典消息末尾收录信息）。"
-            )
-            return
+        quote = None
 
-        quote = self._storage.find_quote_by_id_prefix(code)
+        if code:
+            # 0) 显式编号优先
+            quote = self._storage.find_quote_by_id_prefix(code)
+        elif reply_id:
+            # 1) 已发送典消息映射(回复 bot 发送的典消息,发送时经平台 API 记录)
+            quote_id = self._storage.find_quote_id_by_sent_message(umo, reply_id)
+            if quote_id:
+                quote = self._storage.get_quote_by_id(umo, quote_id)
+            # 2) 被收录的原始消息(回复原消息删除,按原消息 ID 查找)
+            if quote is None:
+                quote = self._storage.find_quote_by_message_id(umo, reply_id)
+            # 3) 回退:get_forward_msg 解析收录信息节点编号(旧典消息)
+            if quote is None and reply is not None:
+                resolved = await self._resolve_reply_quote_id(event, reply)
+                if resolved:
+                    quote = self._storage.find_quote_by_id_prefix(resolved)
+
         if quote is None:
-            yield event.plain_result(f"没有找到编号为「{code}」的典。")
+            if code:
+                yield event.plain_result(f"没有找到编号为「{code}」的典。")
+            else:
+                yield event.plain_result(
+                    "请回复典消息或被收录的原消息发送 /删典，"
+                    "或使用 /删典 <编号> 删除（编号见典消息末尾收录信息）。"
+                )
             return
 
         self._storage.delete_quote(quote.session, quote.id)

@@ -443,6 +443,35 @@ class QuoteStorage:
         quotes = self._rows_to_quotes(rows)
         return quotes[0] if quotes else None
 
+    def get_quote_by_id(self, session: str, quote_id: str) -> Quote | None:
+        """按典 ID 精确查找。"""
+        quote_id = str(quote_id or "").strip()
+        if not quote_id:
+            return None
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM quotes WHERE session = ? AND id = ?",
+                (session, quote_id),
+            ).fetchall()
+        quotes = self._rows_to_quotes(rows)
+        return quotes[0] if quotes else None
+
+    def find_quote_by_message_id(
+        self, session: str, message_id: str
+    ) -> Quote | None:
+        """按被收录的原消息 ID 查找典(回复原消息删除用);无匹配返回 None。"""
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            return None
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM quotes WHERE session = ? AND message_id = ? "
+                "ORDER BY rowid LIMIT 1",
+                (session, message_id),
+            ).fetchall()
+        quotes = self._rows_to_quotes(rows)
+        return quotes[0] if quotes else None
+
     def delete_quote(self, session: str, quote_id: str) -> bool:
         """删除指定典;删除成功返回 True。"""
         with self._db() as conn:
