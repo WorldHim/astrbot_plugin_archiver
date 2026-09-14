@@ -141,6 +141,51 @@ class TestRudian:
         assert results[0][0] == "plain"
         assert "已收录" in results[0][1] and "1 条" in results[0][1]
 
+    def test_archive_with_at_owner(self, plugin):
+        # /入典 跟随 At → 归属以 At 指定的人为准(以 QQ 号保存)
+        event = FakeEvent(message=[At(qq="30003", name="李四"), make_reply()])
+        results = collect(plugin.rudian(event))
+        assert len(results) == 1
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.sender_id == "30003"
+        assert q.sender_name == "李四"
+        # 收录内容仍为被回复消息的内容
+        assert q.text == "哈哈哈哈"
+
+    def test_archive_at_self_excluded(self, plugin):
+        # @Bot 唤醒的自身 At 不影响归属(默认=回复消息发送者)
+        event = FakeEvent(message=[At(qq="99999"), make_reply()], self_id="99999")
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.sender_id == "20002"
+        assert q.sender_name == "张三"
+
+    def test_archive_at_without_name(self, plugin):
+        # At 无昵称 → 归属显示名回退为 QQ 号
+        event = FakeEvent(message=[At(qq="30003"), make_reply()])
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.sender_id == "30003"
+        assert q.sender_name == "30003"
+
+    def test_archive_at_owner_overrides_chat_record(self, plugin):
+        # 聊天记录 + At → At 显式指定覆盖"最后一条消息发送者"默认规则
+        event = FakeEvent(
+            message=[
+                At(qq="40004", name="王五"),
+                make_reply(chain=[Forward(id="fwd-1")], message_str=""),
+            ],
+            bot_responses=TestForward.FORWARD_RESPONSES,
+        )
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.sender_id == "40004"
+        assert q.sender_name == "王五"
+        # 聊天记录本体仍结构化保存
+        assert q.text == "[聊天记录]"
+        assert len(q.forward_nodes) == 2
+
+
 class TestLaidiandian:
     def test_empty_library_prompt(self, plugin):
         event = make_reply_event(None)

@@ -532,6 +532,12 @@ class ArchiverPlugin(Star):
         sender_id, sender_name, text, image_comps, forward_nodes = (
             await self._extract_quote(event, reply)
         )
+        # 显式指定归属:/入典 跟随 At 时,归属以 At 指定的人为准
+        # (QQ 号保存,优先级高于默认归属与聊天记录归属)
+        at_owner_id, at_owner_name = self._resolve_owner_target(event, "")
+        if at_owner_id:
+            sender_id = at_owner_id
+            sender_name = at_owner_name or at_owner_id
         if not text and not image_comps and not forward_nodes:
             yield event.plain_result(
                 "无法读取被回复消息的内容(可能为空消息或不支持的消息类型)，收录失败。"
