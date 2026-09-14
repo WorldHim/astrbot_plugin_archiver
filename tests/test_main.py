@@ -2,11 +2,18 @@
 import sys
 import types
 
-from astrbot.api.message_components import Forward, Image, Node, Nodes, Plain
+from astrbot.api.message_components import At, Forward, Image, Node, Nodes, Plain
 
 from astrbot_plugin_archiver import main as archiver_main
 
-from conftest import UMO_GROUP, UMO_OTHER, FakeContext, collect, make_quote
+from conftest import (
+    UMO_GROUP,
+    UMO_OTHER,
+    FakeContext,
+    FakeEvent,
+    collect,
+    make_quote,
+)
 from conftest import make_reply, make_reply_event, write_png, _BASE
 
 
@@ -473,6 +480,83 @@ class TestForward:
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
         assert q.text == "[转发消息]"
         assert q.forward_nodes == []
+
+
+class TestOwner:
+    def _seed_two_quotes(self, plugin):
+        plugin._storage.add_quote(UMO_GROUP, make_quote(message_id="m1"))  # 张三 20002
+        plugin._storage.add_quote(
+            UMO_GROUP,
+            make_quote(sender_id="30003", sender_name="李四", message_id="m2"),
+        )
+
+    def test_extract_by_at(self, plugin):
+        # /来点典 @李四 → 抽取李四的典
+        self._seed_two_quotes(plugin)
+        event = FakeEvent(message=[At(qq="30003", name="李四")])
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "李四"
+        assert nodes_obj.nodes[0].uin == "30003"
+
+    def test_extract_by_name(self, plugin):
+        # /来点典 李四 → 按昵称抽取李四的典
+        self._seed_two_quotes(plugin)
+        event = FakeEvent(message=[])
+        results = collect(plugin.laidiandian(event, "李四"))
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "李四"
+
+    def test_extract_by_name_partial_match(self, plugin):
+        # 昵称包含匹配:/来点典 张 → 匹配张三
+        self._seed_two_quotes(plugin)
+        event = FakeEvent(message=[])
+        results = collect(plugin.laidiandian(event, "张"))
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "张三"
+
+    def test_extract_owner_not_found(self, plugin):
+        # 指定人没有典 → 提示
+        self._seed_two_quotes(plugin)
+        event = FakeEvent(message=[])
+        results = collect(plugin.laidiandian(event, "赵六"))
+        assert results[0][0] == "plain"
+        assert "还没有" in results[0][1] and "赵六" in results[0][1]
+
+    def test_extract_by_at_not_found(self, plugin):
+        # At 指定的人没有典 → 提示
+        self._seed_two_quotes(plugin)
+        event = FakeEvent(message=[At(qq="88888", name="赵六")])
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "plain"
+        assert "还没有" in results[0][1] and "88888" in results[0][1]
+
+    def test_at_self_excluded(self, plugin):
+        # @Bot 唤醒的自身 At 被排除 → 无目标,随机抽取
+        self._seed_two_quotes(plugin)
+        event = FakeEvent(message=[At(qq="99999")], self_id="99999")
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
+
+    def test_no_owner_random(self, plugin):
+        # 无指定 → 随机抽取(现有行为)
+        self._seed_two_quotes(plugin)
+        event = FakeEvent(message=[])
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
+
+    def test_owner_extract_global_fallback(self, tmp_path):
+        # 会话内无该归属的典,fallback_global 开启 → 从所有会话抽取
+        plugin = _plugin_with_config(tmp_path, {"fallback_global": True})
+        plugin._storage.add_quote(
+            UMO_OTHER,
+            make_quote(sender_id="30003", sender_name="李四", message_id="m2"),
+        )
+        event = FakeEvent(message=[])
+        results = collect(plugin.laidiandian(event, "李四"))
+        assert results[0][0] == "chain"
+        assert results[0][1][0].nodes[0].name == "李四"
 
 
 class TestConfig:

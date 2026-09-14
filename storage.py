@@ -260,6 +260,45 @@ class QuoteStorage:
             all_quotes.extend(quotes)
         return random.choice(all_quotes) if all_quotes else None
 
+    @staticmethod
+    def _owner_matches(quote: Quote, owner_id: str = "", owner_name: str = "") -> bool:
+        """判断典的归属是否匹配目标。
+
+        QQ 号(owner_id)优先精确匹配;其次昵称(owner_name)完整或包含匹配。
+        两者均为空时视为匹配全部。
+        """
+        if owner_id:
+            return quote.sender_id == owner_id
+        if owner_name:
+            return bool(quote.sender_name) and (
+                quote.sender_name == owner_name
+                or owner_name in quote.sender_name
+            )
+        return True
+
+    def random_quote_by_owner(
+        self, umo: str, owner_id: str = "", owner_name: str = ""
+    ) -> Quote | None:
+        """从某会话中随机抽取归属匹配的典;无匹配时返回 None。"""
+        candidates = [
+            q
+            for q in self.session_quotes(umo)
+            if self._owner_matches(q, owner_id, owner_name)
+        ]
+        return random.choice(candidates) if candidates else None
+
+    def random_quote_by_owner_any(
+        self, owner_id: str = "", owner_name: str = ""
+    ) -> Quote | None:
+        """从所有会话中随机抽取归属匹配的典;无匹配时返回 None。"""
+        candidates = [
+            q
+            for quotes in self.load_quotes().values()
+            for q in quotes
+            if self._owner_matches(q, owner_id, owner_name)
+        ]
+        return random.choice(candidates) if candidates else None
+
     # ---------- 本地图片库 ----------
 
     def store_image(self, src_path: str | Path, threshold_bytes: int = 0) -> str | None:

@@ -281,16 +281,23 @@ class FakeEvent:
         platform_name="aiocqhttp",
         forward_text=None,
         bot_responses=None,
+        self_id="",
     ):
         self._uid = uid
+        self._self_id = self_id
         self.message_str = "入典"
-        self.message_obj = types.SimpleNamespace(message=list(message or []))
+        self.message_obj = types.SimpleNamespace(
+            message=list(message or []), self_id=self_id
+        )
         self.unified_msg_origin = unified_msg_origin or UMO_GROUP
         self._platform_name = platform_name
         # 模拟 get_forward_msg 远程拉取结果(stub 提取器读取)
         self._forward_text = forward_text
         # 模拟 OneBot bot 接口(结构化聊天记录拉取);None 表示平台无 bot 接口
         self.bot = FakeBot(bot_responses) if bot_responses is not None else None
+
+    def get_self_id(self):
+        return self._self_id
 
     def get_messages(self):
         return self.message_obj.message

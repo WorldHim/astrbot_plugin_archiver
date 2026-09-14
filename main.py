@@ -603,19 +603,56 @@ class ArchiverPlugin(Star):
                 f"已收录「{sender_name}」的发言，本会话典库共 {count} 条"
             )
 
+    def _resolve_owner_target(
+        self, event: AstrMessageEvent, owner: str
+    ) -> tuple[str, str]:
+        """解析抽取目标归属人。
+
+        消息链中的 At 组件优先(以 QQ 号精确匹配,排除 @Bot 唤醒的自身);
+        其次取命令后的昵称文本。均无时返回 ("", "") 表示随机抽取。
+        """
+        self_id = str(event.get_self_id() or "").strip()
+        for comp in event.get_messages():
+            if getattr(comp, "type", None) == ComponentType.At:
+                qq = str(getattr(comp, "qq", "") or "").strip()
+                if qq and qq != self_id:
+                    name = str(getattr(comp, "name", "") or "").strip()
+                    return qq, name
+        owner = str(owner or "").strip()
+        if owner:
+            return "", owner
+        return "", ""
+
     @filter.command("来点典", alias={"随机典", "来典"})
-    async def laidiandian(self, event: AstrMessageEvent):
-        """从典库中随机调用一条已收录的典"""
+    async def laidiandian(self, event: AstrMessageEvent, owner: str = ""):
+        """从典库中随机调用一条已收录的典;可 @某人 或输入昵称抽取指定人的典"""
         umo = event.unified_msg_origin
-        quote = self._storage.random_quote(umo)
-        if quote is None and self._cfg_bool("fallback_global", False):
-            # 当前会话典库为空时,按配置回退到从所有会话的典库中抽取
-            quote = self._storage.random_quote_any()
+        owner_id, owner_name = self._resolve_owner_target(event, owner)
+        if owner_id or owner_name:
+            # 抽取指定归属人的典(QQ 号优先精确匹配,其次昵称)
+            quote = self._storage.random_quote_by_owner(
+                umo, owner_id, owner_name
+            )
+            if quote is None and self._cfg_bool("fallback_global", False):
+                quote = self._storage.random_quote_by_owner_any(
+                    owner_id, owner_name
+                )
+        else:
+            quote = self._storage.random_quote(umo)
+            if quote is None and self._cfg_bool("fallback_global", False):
+                # 当前会话典库为空时,按配置回退到从所有会话的典库中抽取
+                quote = self._storage.random_quote_any()
 
         if quote is None:
-            yield event.plain_result(
-                "典库还是空的，回复一条消息发送 /入典 收录第一条典吧！"
-            )
+            if owner_id or owner_name:
+                yield event.plain_result(
+                    f"典库里还没有「{owner_id or owner_name}」的典，"
+                    "回复 TA 的消息发送 /入典 收录吧！"
+                )
+            else:
+                yield event.plain_result(
+                    "典库还是空的，回复一条消息发送 /入典 收录第一条典吧！"
+                )
             return
 
         if self._use_forward(event):
