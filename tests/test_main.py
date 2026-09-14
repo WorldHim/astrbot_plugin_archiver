@@ -301,6 +301,9 @@ class TestForward:
         assert len(results) == 1
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
         assert q.text == "[聊天记录]"
+        # 归属为聊天记录最后一条消息的发送者(以 QQ 号保存)
+        assert q.sender_id == "30003"
+        assert q.sender_name == "李四"
         assert len(q.forward_nodes) == 2
         assert q.forward_nodes[0]["sender_name"] == "张三"
         assert q.forward_nodes[0]["sender_id"] == "20002"
@@ -365,6 +368,38 @@ class TestForward:
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
         assert q.text == "看这个\n[聊天记录]"
         assert len(q.forward_nodes) == 2
+
+    def test_forward_owner_is_last_sender(self, plugin):
+        # 归属:聊天记录取其中最后一条消息的发送者(以 QQ 号保存)
+        reply = make_reply(chain=[Forward(id="fwd-1")], message_str="")
+        event = make_reply_event(reply, bot_responses=self.FORWARD_RESPONSES)
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.sender_id == "30003"  # 最后一条消息发送者的 QQ 号
+        assert q.sender_name == "李四"
+
+    def test_forward_owner_falls_back_when_sender_id_missing(self, plugin):
+        # 子消息无 QQ 号 → 归属回退为回复消息的发送者
+        responses = {
+            "get_forward_msg": {
+                "data": {
+                    "messages": [
+                        {
+                            "sender": {"nickname": "无名"},
+                            "message": [
+                                {"type": "text", "data": {"text": "无号码"}}
+                            ],
+                        },
+                    ]
+                }
+            }
+        }
+        reply = make_reply(chain=[Forward(id="fwd-1")], message_str="")
+        event = make_reply_event(reply, bot_responses=responses)
+        collect(plugin.rudian(event))
+        q = plugin._storage.session_quotes(UMO_GROUP)[0]
+        assert q.sender_id == "20002"  # 回复消息发送者
+        assert q.sender_name == "无名"
 
     def test_forward_replay_keeps_chat_record(self, plugin):
         # 回放:聊天记录典保持聊天记录形态,最后一条为收录信息节点

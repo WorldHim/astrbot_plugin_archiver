@@ -155,6 +155,18 @@ class ArchiverPlugin(Star):
         if has_forward:
             forward_nodes = await self._fetch_forward_nodes(event, reply)
             if forward_nodes:
+                # 归属:默认为回复消息的发送者;聊天记录则取其中最后一条
+                # 消息的发送者(以 QQ 号保存,避免群昵称变化影响归属)
+                last_node = forward_nodes[-1]
+                if isinstance(last_node, dict):
+                    sender_id = (
+                        str(last_node.get("sender_id") or "").strip() or sender_id
+                    )
+                    sender_name = (
+                        str(last_node.get("sender_name") or "").strip()
+                        or sender_id
+                        or sender_name
+                    )
                 # 外层文本(如有)保留在 text 中,聊天记录本体在 forward_nodes
                 outer = "\n".join(parts).strip()
                 text = f"{outer}\n[聊天记录]" if outer else "[聊天记录]"
