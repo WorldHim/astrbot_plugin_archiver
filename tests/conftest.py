@@ -305,7 +305,7 @@ class FakeEvent:
     ):
         self._uid = uid
         self._self_id = self_id
-        self.message_str = "入典"
+        self.message_str = "保存"
         self.message_obj = types.SimpleNamespace(
             message=list(message or []), self_id=self_id
         )

@@ -36,7 +36,7 @@ class TestRudian:
         # 尾部节点为确认信息
         assert "已收录" in nodes_obj.nodes[-1].content[0].text
         assert "1 条" in nodes_obj.nodes[-1].content[0].text
-        # 已写入典库
+        # 已写入语录库
         quotes = plugin._storage.session_quotes(UMO_GROUP)
         assert len(quotes) == 1
         q = quotes[0]
@@ -80,7 +80,7 @@ class TestRudian:
         event = make_reply_event(make_reply())
         collect(plugin.rudian(event))
         results = collect(plugin.rudian(event))
-        assert "已经在典库" in results[0][1]
+        assert "已经在语录库" in results[0][1]
         assert plugin._storage.session_count(UMO_GROUP) == 1
 
     def test_message_with_image(self, plugin, tmp_path):
@@ -190,14 +190,14 @@ class TestLaidiandian:
     def test_empty_library_prompt(self, plugin):
         event = make_reply_event(None)
         results = collect(plugin.laidiandian(event))
-        assert "典库还是空的" in results[0][1]
+        assert "语录库还是空的" in results[0][1]
 
     def test_random_replay_text(self, plugin):
         plugin._storage.add_quote(UMO_GROUP, make_quote())
         event = make_reply_event(None)
         results = collect(plugin.laidiandian(event))
         assert results[0][0] == "chain"
-        # chain = [Nodes],典藏以聊天记录(合并转发)形式呈现
+        # chain = [Nodes],语录以聊天记录(合并转发)形式呈现
         nodes_obj = results[0][1][0]
         assert nodes_obj.nodes[0].name == "张三"
         assert "哈哈哈哈" in nodes_obj.nodes[0].content[0].text
@@ -215,7 +215,7 @@ class TestLaidiandian:
         assert img.file == "http://example.com/a.jpg"
 
     def test_replay_includes_archive_info_node(self, plugin):
-        # 收录人/时间有效时附带"典藏档案"信息节点
+        # 收录人/时间有效时附带"语录档案"信息节点
         import time as _time
 
         plugin._storage.add_quote(
@@ -225,7 +225,7 @@ class TestLaidiandian:
         results = collect(plugin.laidiandian(event))
         nodes_obj = results[0][1][0]
         assert len(nodes_obj.nodes) == 2
-        assert nodes_obj.nodes[1].name == "典藏档案"
+        assert nodes_obj.nodes[1].name == "语录档案"
         assert "收录人：tester" in nodes_obj.nodes[1].content[0].text
 
     def test_forward_disabled_falls_back_to_text(self, tmp_path):
@@ -300,11 +300,11 @@ class TestLaidiandian:
         assert node.content[1].file == "http://example.com/a.jpg"
 
     def test_fallback_global_disabled_by_default(self, plugin):
-        # 其他会话有典,本会话为空;默认不开全局回退 → 提示典库为空
+        # 其他会话有典,本会话为空;默认不开全局回退 → 提示语录库为空
         plugin._storage.add_quote(UMO_OTHER, make_quote())
         event = make_reply_event(None, umo="aiocqhttp:GroupMessage:current")
         results = collect(plugin.laidiandian(event))
-        assert "典库还是空的" in results[0][1]
+        assert "语录库还是空的" in results[0][1]
 
     def test_fallback_global_enabled(self, tmp_path):
         plugin = _plugin_with_config(tmp_path, {"fallback_global": True})
@@ -312,7 +312,7 @@ class TestLaidiandian:
         event = make_reply_event(None, umo="aiocqhttp:GroupMessage:current")
         results = collect(plugin.laidiandian(event))
         assert results[0][0] == "chain"
-        # 聊天记录形式:发送人昵称在节点上,内容为典藏文本
+        # 聊天记录形式:发送人昵称在节点上,内容为语录文本
         nodes_obj = results[0][1][0]
         assert nodes_obj.nodes[0].name == "张三"
         assert nodes_obj.nodes[0].content[0].text == "哈哈哈哈"
@@ -375,7 +375,7 @@ class TestForward:
         assert nodes_obj.nodes[0].content[0].text == "今天天气真好"
         assert nodes_obj.nodes[1].name == "李四"
         assert nodes_obj.nodes[1].content[0].text == "是啊"
-        assert nodes_obj.nodes[-1].name == "典藏档案"
+        assert nodes_obj.nodes[-1].name == "语录档案"
         assert "已收录" in nodes_obj.nodes[-1].content[0].text
         # 回执中不出现占位符
         for node in nodes_obj.nodes:
@@ -485,7 +485,7 @@ class TestForward:
         assert nodes_obj.nodes[0].content[0].text == "今天天气真好"
         assert nodes_obj.nodes[1].name == "李四"
         # 最后为收录信息节点
-        assert nodes_obj.nodes[-1].name == "典藏档案"
+        assert nodes_obj.nodes[-1].name == "语录档案"
         assert "收录人" in nodes_obj.nodes[-1].content[0].text
 
     def test_forward_replay_mixed_outer_text(self, plugin):
@@ -515,7 +515,7 @@ class TestForward:
         # 中间为聊天记录子消息
         assert nodes_obj.nodes[1].content[0].text == "今天天气真好"
         # 最后为收录信息
-        assert nodes_obj.nodes[-1].name == "典藏档案"
+        assert nodes_obj.nodes[-1].name == "语录档案"
 
     def test_forward_unsupported_platform_falls_back(self, plugin):
         # 非 QQ 平台引用聊天记录 → 回退 [转发消息] 占位符
@@ -536,7 +536,7 @@ class TestOwner:
         )
 
     def test_extract_by_at(self, plugin):
-        # /来点典 @李四 → 抽取李四的典
+        # /来点典 @李四 → 抽取李四的语录
         self._seed_two_quotes(plugin)
         event = FakeEvent(message=[At(qq="30003", name="李四")])
         results = collect(plugin.laidiandian(event))
@@ -546,7 +546,7 @@ class TestOwner:
         assert nodes_obj.nodes[0].uin == "30003"
 
     def test_extract_by_name(self, plugin):
-        # /来点典 李四 → 按昵称抽取李四的典
+        # /来点典 李四 → 按昵称抽取李四的语录
         self._seed_two_quotes(plugin)
         event = FakeEvent(message=[])
         results = collect(plugin.laidiandian(event, "李四"))
@@ -592,7 +592,7 @@ class TestOwner:
         assert results[0][0] == "chain"
 
     def test_owner_extract_global_fallback(self, tmp_path):
-        # 会话内无该归属的典,fallback_global 开启 → 从所有会话抽取
+        # 会话内无该归属的语录,fallback_global 开启 → 从所有会话抽取
         plugin = _plugin_with_config(tmp_path, {"fallback_global": True})
         plugin._storage.add_quote(
             UMO_OTHER,
@@ -606,7 +606,7 @@ class TestOwner:
 
 class TestShandian:
     def test_sent_message_recorded_via_platform_api(self, plugin):
-        # QQ 平台直接调用平台 API 发送典消息 → 记录映射,回执不经框架输出
+        # QQ 平台直接调用平台 API 发送语录消息 → 记录映射,回执不经框架输出
         responses = {
             **TestForward.FORWARD_RESPONSES,
             "send_group_forward_msg": {"data": {"message_id": "sent-100"}},
@@ -615,14 +615,14 @@ class TestShandian:
         results = collect(plugin.rudian(event))
         assert results == []  # 直接平台发送,无框架输出
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
-        # 映射已记录:典消息 message_id → 典
+        # 映射已记录:语录消息 message_id → 典
         assert (
             plugin._storage.find_quote_id_by_sent_message(UMO_GROUP, "sent-100")
             == q.id
         )
 
     def test_delete_by_sent_mapping(self, plugin):
-        # 回复 bot 发送的典消息 → 按映射精确删除(不依赖 get_forward_msg)
+        # 回复 bot 发送的语录消息 → 按映射精确删除(不依赖 get_forward_msg)
         q = make_quote()
         plugin._storage.add_quote(UMO_GROUP, q)
         plugin._storage.record_sent_message(UMO_GROUP, "sent-200", q.id)
@@ -651,7 +651,7 @@ class TestShandian:
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
         # 回复 bot 的文本回执(内容含编号),适配器回填到 Reply.chain/message_str
         receipt = (
-            f"已收录「张三」的发言，本会话典库共 1 条（编号：{q.id[:8]}）"
+            f"已收录「张三」的发言，本会话语录库共 1 条（编号：{q.id[:8]}）"
         )
         del_event = FakeEvent(
             message=[make_reply(id="text-1", chain=[Plain(receipt)], message_str=receipt)]
@@ -692,7 +692,7 @@ class TestShandian:
         assert "请回复" in results[0][1] or "编号" in results[0][1]
 
     def test_delete_by_reply(self, plugin):
-        # 收录 → 回执含编号 → 回复典消息(get_forward_msg 返回含编号文本) → /删典
+        # 收录 → 回执含编号 → 回复语录消息(get_forward_msg 返回含编号文本) → /删典
         event = make_reply_event(
             make_reply(),
             bot_responses={
@@ -713,7 +713,7 @@ class TestShandian:
                                 "message": [
                                     {
                                         "type": "text",
-                                        "data": {"text": "已收录，本会话典库共 1 条（编号：abcdef12）"},
+                                        "data": {"text": "已收录，本会话语录库共 1 条（编号：abcdef12）"},
                                     }
                                 ],
                             },
@@ -725,7 +725,7 @@ class TestShandian:
         results = collect(plugin.rudian(event))
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
         assert q is not None
-        # 回复 bot 发送的典消息(Reply.id 为合并转发消息 ID)
+        # 回复 bot 发送的语录消息(Reply.id 为合并转发消息 ID)
         del_event = FakeEvent(
             message=[make_reply(id="sent-1", chain=[])],
             bot_responses={
@@ -738,7 +738,7 @@ class TestShandian:
                                     {
                                         "type": "text",
                                         "data": {
-                                            "text": "已收录，本会话典库共 1 条（编号："
+                                            "text": "已收录，本会话语录库共 1 条（编号："
                                             + q.id[:8]
                                             + "）"
                                         },
@@ -772,13 +772,13 @@ class TestShandian:
         assert plugin._storage.session_count(UMO_GROUP) == 1
 
     def test_delete_no_target(self, plugin):
-        # 既未回复典消息也无编号 → 使用提示
+        # 既未回复语录消息也无编号 → 使用提示
         event = FakeEvent(message=[])
         results = collect(plugin.shandian(event))
         assert "请回复" in results[0][1] or "编号" in results[0][1]
 
     def test_reply_not_a_quote_message(self, plugin):
-        # 回复的消息拉不到编号(非典消息) → 提示
+        # 回复的消息拉不到编号(非语录消息) → 提示
         event = make_reply_event(
             make_reply(id="sent-2", chain=[]),
             bot_responses={

@@ -78,7 +78,7 @@ class TestRoundtrip:
 
 class TestDurability:
     def test_db_file_created(self, storage):
-        # 典库以 SQLite 数据库形式持久化,重启/重载后数据仍在
+        # 语录库以 SQLite 数据库形式持久化,重启/重载后数据仍在
         storage.add_quote(UMO_GROUP, make_quote())
         assert storage._db_file.is_file()
         from astrbot_plugin_archiver.storage import QuoteStorage

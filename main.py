@@ -42,7 +42,7 @@ FORWARD_PLATFORMS = {"aiocqhttp", "satori"}
 @register(
     PLUGIN_NAME,
     "WorldHim",
-    "入典：回复一条消息即可收录其发送人与内容，并可随机调用典库中的典藏。",
+    "语录：回复一条消息即可收录其发送人与内容，并可随机调用语录库中的语录。",
     PLUGIN_VERSION,
 )
 class ArchiverPlugin(Star):
@@ -419,7 +419,7 @@ class ArchiverPlugin(Star):
         return entry
 
     def _image_component(self, image: dict[str, str]) -> Image | None:
-        """由典藏记录构造图片组件:优先本地存档,缺失时回退 URL。"""
+        """由语录记录构造图片组件:优先本地存档,缺失时回退 URL。"""
         full = self._storage.resolve_image_path(str(image.get("path") or ""))
         if full is not None:
             return Image.fromFileSystem(str(full))
@@ -429,7 +429,7 @@ class ArchiverPlugin(Star):
     # ---------- 聊天记录(合并转发)输出 ----------
 
     def _quote_node(self, quote: Quote) -> Node:
-        """将一条典构造为合并转发的消息节点(发送人 + 内容 + 图片)。
+        """将一条语录构造为合并转发的消息节点(发送人 + 内容 + 图片)。
 
         节点以被收录者的昵称为展示名,内容为收录文本与图片,
         在支持合并转发的平台(如 QQ)呈现为一条"聊天记录"。
@@ -452,13 +452,13 @@ class ArchiverPlugin(Star):
     def _build_forward_quote_nodes(
         self, quote: Quote, info_text: str | None = None
     ) -> list:
-        """将聊天记录(结构化子消息)典构造为转发消息节点。
+        """将聊天记录(结构化子消息)语录构造为转发消息节点。
 
         保持聊天记录形态:每条子消息一个节点,最后追加一条收录信息节点。
         混合收录时的外层文本作为第一条节点(被收录者身份)。
 
         Args:
-            quote: 聊天记录典。
+            quote: 聊天记录语录。
             info_text: 收录信息节点文本;None 时使用收录人/收录时间。
         """
         nodes: list = []
@@ -494,17 +494,17 @@ class ArchiverPlugin(Star):
                 )
             )
         if not nodes:
-            nodes.append(Node(content=[Plain("[聊天记录]")], name="典藏档案"))
+            nodes.append(Node(content=[Plain("[聊天记录]")], name="语录档案"))
         # 最后增加一条收录信息节点
         info = info_text if info_text is not None else self._archive_info_text(quote)
         nodes.append(
-            Node(content=[Plain(info or "已收录典藏")], name="典藏档案")
+            Node(content=[Plain(info or "已收录语录")], name="语录档案")
         )
         return nodes
 
     @staticmethod
     def _archive_info_text(quote: Quote) -> str:
-        """由典藏记录生成收录信息文本(收录人/收录时间/编号);无信息时返回空串。"""
+        """由语录记录生成收录信息文本(收录人/收录时间/编号);无信息时返回空串。"""
         parts: list[str] = []
         by = str(quote.archived_by_name or "").strip()
         if by:
@@ -521,25 +521,25 @@ class ArchiverPlugin(Star):
         return "\n".join(parts)
 
     def _quote_code(self, quote: Quote) -> str:
-        """典的展示编号(ID 前 8 位)。"""
+        """语录的展示编号(ID 前 8 位)。"""
         return str(quote.id or "")[:8]
 
     # ---------- 指令 ----------
 
-    @filter.command("入典", alias={"收录", "存典"})
+    @filter.command("保存", alias={"入典", "收录", "存档", "保存语录"})
     async def rudian(self, event: AstrMessageEvent):
-        """回复一条消息并发送 /入典，将该消息的发送人与内容存档"""
+        """回复一条消息并发送 /保存，将该消息的发送人与内容存档"""
         reply = self._find_reply(event)
         if reply is None:
             yield event.plain_result(
-                "请先【回复】一条消息，再发送 /入典 将其收录进典库~"
+                "请⌈回复⌋一条消息并发送 /保存 将其存档"
             )
             return
 
         sender_id, sender_name, text, image_comps, forward_nodes = (
             await self._extract_quote(event, reply)
         )
-        # 显式指定归属:/入典 跟随 At 时,归属以 At 指定的人为准
+        # 显式指定归属:/保存 跟随 At 时,归属以 At 指定的人为准
         # (QQ 号保存,优先级高于默认归属与聊天记录归属)
         at_owner_id, at_owner_name = self._resolve_owner_target(event, "")
         if at_owner_id:
@@ -554,7 +554,7 @@ class ArchiverPlugin(Star):
         umo = event.unified_msg_origin
         message_id = str(getattr(reply, "id", "") or "")
         if message_id and self._storage.has_message(umo, message_id):
-            yield event.plain_result("这条消息已经在典库里啦~")
+            yield event.plain_result("这条消息已经在语录库里啦~")
             return
 
         # 引用图片 + 聊天记录子消息图片并行下载落盘(超过阈值自动压缩)
@@ -601,7 +601,7 @@ class ArchiverPlugin(Star):
                 nodes: list = self._build_forward_quote_nodes(
                     quote,
                     info_text=(
-                        f"已收录，本会话典库共 {count} 条"
+                        f"已收录，本会话语录库共 {count} 条"
                         f"（编号：{self._quote_code(quote)}）"
                     ),
                 )
@@ -611,14 +611,14 @@ class ArchiverPlugin(Star):
                     Node(
                         content=[
                             Plain(
-                                f"已收录，本会话典库共 {count} 条"
+                                f"已收录，本会话语录库共 {count} 条"
                                 f"（编号：{self._quote_code(quote)}）"
                             )
                         ],
-                        name="入典成功",
+                        name="保存成功",
                     )
                 )
-            # QQ 平台直接调用平台 API 发送并记录典消息映射(回复删典用)
+            # QQ 平台直接调用平台 API 发送并记录语录消息映射(回复删除用)
             sent_ids = await self._send_forward_nodes(event, nodes)
             if sent_ids is not None:
                 self._record_sent(event, sent_ids, quote)
@@ -627,7 +627,7 @@ class ArchiverPlugin(Star):
             yield event.chain_result([Nodes(nodes=nodes)])
         else:
             yield event.plain_result(
-                f"已收录「{sender_name}」的发言，本会话典库共 {count} 条"
+                f"已收录「{sender_name}」的发言，本会话语录库共 {count} 条"
                 f"（编号：{self._quote_code(quote)}）"
             )
 
@@ -651,13 +651,13 @@ class ArchiverPlugin(Star):
             return "", owner
         return "", ""
 
-    @filter.command("来点典", alias={"随机典", "来典"})
+    @filter.command("语录", alias={"随机语录"})
     async def laidiandian(self, event: AstrMessageEvent, owner: str = ""):
-        """从典库中随机调用一条已收录的典;可 @某人 或输入昵称抽取指定人的典"""
+        """发送 /语录 从语录库中随机调用一条已收录的语录;可 @某人 或输入昵称抽取指定人的语录"""
         umo = event.unified_msg_origin
         owner_id, owner_name = self._resolve_owner_target(event, owner)
         if owner_id or owner_name:
-            # 抽取指定归属人的典(QQ 号优先精确匹配,其次昵称)
+            # 抽取指定归属人的语录(QQ 号优先精确匹配,其次昵称)
             quote = self._storage.random_quote_by_owner(
                 umo, owner_id, owner_name
             )
@@ -668,32 +668,32 @@ class ArchiverPlugin(Star):
         else:
             quote = self._storage.random_quote(umo)
             if quote is None and self._cfg_bool("fallback_global", False):
-                # 当前会话典库为空时,按配置回退到从所有会话的典库中抽取
+                # 当前会话语录库为空时,按配置回退到从所有会话的语录库中抽取
                 quote = self._storage.random_quote_any()
 
         if quote is None:
             if owner_id or owner_name:
                 yield event.plain_result(
-                    f"典库里还没有「{owner_id or owner_name}」的典，"
-                    "回复 TA 的消息发送 /入典 收录吧！"
+                    f"语录库里还没有「{owner_id or owner_name}」的语录，"
+                    "回复 TA 的消息发送 /保存 收录吧！"
                 )
             else:
                 yield event.plain_result(
-                    "典库还是空的，回复一条消息发送 /入典 收录第一条典吧！"
+                    "语录库还是空的，回复一条消息发送 /保存 收录第一条语录吧！"
                 )
             return
 
         if self._use_forward(event):
             # 以聊天记录(合并转发)形式发送,更直观优雅
             if quote.forward_nodes:
-                # 聊天记录典:保持聊天记录形态,最后一条为收录信息
+                # 聊天记录语录:保持聊天记录形态,最后一条为收录信息
                 nodes: list = self._build_forward_quote_nodes(quote)
             else:
                 nodes = [self._quote_node(quote)]
                 info = self._archive_info_text(quote)
                 if info:
-                    nodes.append(Node(content=[Plain(info)], name="典藏档案"))
-            # QQ 平台直接调用平台 API 发送并记录典消息映射(回复删典用)
+                    nodes.append(Node(content=[Plain(info)], name="语录档案"))
+            # QQ 平台直接调用平台 API 发送并记录语录消息映射(回复删除用)
             sent_ids = await self._send_forward_nodes(event, nodes)
             if sent_ids is not None:
                 self._record_sent(event, sent_ids, quote)
@@ -717,7 +717,7 @@ class ArchiverPlugin(Star):
     ) -> list[str] | None:
         """直接调用 QQ 平台 API 发送合并转发,返回平台返回的 message_id 列表。
 
-        记录典消息与典的映射后,回复典消息删除时可精确定位。
+        记录语录消息与语录的映射后,回复语录消息删除时可精确定位。
         非 QQ 平台、无 bot 接口或发送失败时返回 None(调用方回退框架发送)。
         """
         platform = str(event.get_platform_name() or "").strip().lower()
@@ -761,7 +761,7 @@ class ArchiverPlugin(Star):
     def _record_sent(
         self, event: AstrMessageEvent, sent_ids: list[str] | None, quote: Quote
     ) -> None:
-        """记录已发送典消息与典的映射(删除时精确定位)。"""
+        """记录已发送语录消息与语录的映射(删除时精确定位)。"""
         if not sent_ids:
             return
         umo = str(event.unified_msg_origin or "")
@@ -771,7 +771,7 @@ class ArchiverPlugin(Star):
     async def _resolve_reply_quote_id(
         self, event: AstrMessageEvent, reply: Reply
     ) -> str | None:
-        """从被回复的典消息(本 bot 发送的合并转发)解析典编号。
+        """从被回复的语录消息(本 bot 发送的合并转发)解析语录编号。
 
         通过 get_forward_msg 拉取合并转发内容,解析收录信息节点中的
         "编号:xxx";仅 aiocqhttp(QQ)平台支持,失败返回 None。
@@ -836,9 +836,9 @@ class ArchiverPlugin(Star):
         return None
 
     def _resolve_reply_text_code(self, reply: Reply) -> str | None:
-        """从被回复消息回填的内容(Reply.chain/message_str)中解析典编号。
+        """从被回复消息回填的内容(Reply.chain/message_str)中解析语录编号。
 
-        适配器回复普通消息时会回填被回复消息的内容,典消息末尾收录信息
+        适配器回复普通消息时会回填被回复消息的内容,语录消息末尾收录信息
         含"编号:xxx"(文本回执与合并转发收录信息均嵌入编号)。纯本地解析,
         不依赖任何平台接口。
         """
@@ -870,9 +870,9 @@ class ArchiverPlugin(Star):
         # 2) message_str:被回复消息的纯文本表示
         return find_in_text(str(getattr(reply, "message_str", "") or ""))
 
-    @filter.command("删典", alias={"删除典"})
+    @filter.command("删除", alias={"删除语录"})
     async def shandian(self, event: AstrMessageEvent, code: str = ""):
-        """回复典消息或被收录的原消息发送 /删典 删除;也可 /删典 <编号>"""
+        """回复语录消息或被收录的原消息发送 /删除 删除;也可 /删除 <编号>"""
         reply = self._find_reply(event)
         code = str(code or "").strip()
         reply_id = (
@@ -887,7 +887,7 @@ class ArchiverPlugin(Star):
             # 0) 显式编号优先
             quote = self._storage.find_quote_by_id_prefix(code)
         elif reply_id:
-            # 1) 已发送典消息映射(回复 bot 发送的典消息,发送时经平台 API 记录)
+            # 1) 已发送语录消息映射(回复 bot 发送的语录消息,发送时经平台 API 记录)
             quote_id = self._storage.find_quote_id_by_sent_message(umo, reply_id)
             if quote_id:
                 quote = self._storage.get_quote_by_id(umo, quote_id)
@@ -900,7 +900,7 @@ class ArchiverPlugin(Star):
             # 3) 被收录的原始消息(回复原消息删除,按原消息 ID 查找)
             if quote is None:
                 quote = self._storage.find_quote_by_message_id(umo, reply_id)
-            # 4) 回退:get_forward_msg 解析收录信息节点编号(旧典消息)
+            # 4) 回退:get_forward_msg 解析收录信息节点编号(旧语录消息)
             if quote is None and reply is not None:
                 resolved = await self._resolve_reply_quote_id(event, reply)
                 if resolved:
@@ -908,22 +908,22 @@ class ArchiverPlugin(Star):
 
         if quote is None:
             if code:
-                yield event.plain_result(f"没有找到编号为「{code}」的典。")
+                yield event.plain_result(f"没有找到编号为「{code}」的语录。")
             else:
                 yield event.plain_result(
-                    "请回复典消息或被收录的原消息发送 /删典，"
-                    "或使用 /删典 <编号> 删除（编号见典消息末尾收录信息）。"
+                    "请回复语录消息或被收录的原消息发送 /删除，"
+                    "或使用 /删除 <编号> 删除（编号见语录消息末尾收录信息）。"
                 )
             return
 
         self._storage.delete_quote(quote.session, quote.id)
-        # 同步清理该典的已发送消息映射记录
+        # 同步清理该语录的已发送消息映射记录
         self._storage.delete_sent_message(quote.session, quote.id)
         logger.info(
             f"[archiver] deleted quote {quote.id} from {quote.session}"
         )
         yield event.plain_result(
-            f"已删除「{quote.sender_name}」的典（编号：{self._quote_code(quote)}）。"
+            f"已删除「{quote.sender_name}」的语录（编号：{self._quote_code(quote)}）。"
         )
 
     async def terminate(self):

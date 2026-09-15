@@ -1,18 +1,18 @@
 {
   "use_forward": {
-    "description": "以聊天记录(合并转发)形式输出收录回执与典藏",
+    "description": "以聊天记录(合并转发)形式输出收录回执与语录",
     "hint": "不支持合并转发的平台(如部分微信/Telegram 接入)可关闭,回退为文本输出",
     "type": "bool",
     "default": true
   },
   "session_quote_limit": {
-    "description": "每个会话典库的收录上限(条)",
-    "hint": "超出后自动淘汰最早的典;0 表示不限制",
+    "description": "每个会话语录库的收录上限(条)",
+    "hint": "超出后自动淘汰最早的语录;0 表示不限制",
     "type": "int",
     "default": 0
   },
   "fallback_global": {
-    "description": "当前会话典库为空时,是否从所有会话的典库中随机抽取",
+    "description": "当前会话语录库为空时,是否从所有会话的语录库中随机抽取",
     "type": "bool",
     "default": false
   },
