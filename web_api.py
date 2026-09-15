@@ -303,6 +303,7 @@ class QuoteWebApi:
                     "sender_name": str(node.get("sender_name") or ""),
                     "text": str(node.get("text") or ""),
                     "image_count": len(node.get("images") or []),
+                    "time": float(node.get("time") or 0),
                 }
                 for node in quote.forward_nodes
             ],

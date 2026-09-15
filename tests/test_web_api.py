@@ -380,12 +380,14 @@ class TestQuoteDetail:
                     "sender_name": "用户A",
                     "text": "第一句",
                     "images": [{"url": "https://example.com/a.jpg"}],
+                    "time": 1735689600,
                 },
                 {
                     "sender_id": "10002",
                     "sender_name": "用户B",
                     "text": "第二句",
                     "images": [],
+                    "time": 1735689660,
                 },
             ],
         )
@@ -401,7 +403,9 @@ class TestQuoteDetail:
         assert nodes[0]["sender_name"] == "用户A"
         assert nodes[0]["text"] == "第一句"
         assert nodes[0]["image_count"] == 1
+        assert nodes[0]["time"] == 1735689600
         assert nodes[1]["image_count"] == 0
+        assert nodes[1]["time"] == 1735689660
 
     def test_detail_plain_quote(self, plugin, monkeypatch):
         plugin._storage.add_quote(

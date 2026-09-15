@@ -43,6 +43,14 @@ class Quote:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    @staticmethod
+    def _node_time(value) -> float:
+        """将节点时间戳转为 float;无效值回退 0(无时间,前端不显示)。"""
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     @classmethod
     def from_dict(cls, data: dict) -> "Quote":
         """从 dict 还原;字段缺失/类型异常时回退默认值。"""
@@ -84,6 +92,7 @@ class Quote:
                         "sender_name": str(item.get("sender_name") or ""),
                         "text": str(item.get("text") or ""),
                         "images": sub_images,
+                        "time": cls._node_time(item.get("time")),
                     }
                 )
 

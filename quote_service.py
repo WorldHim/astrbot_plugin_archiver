@@ -240,6 +240,14 @@ class QuoteService:
                         nodes.append(node)
         return nodes
 
+    @staticmethod
+    def _node_time(value) -> float:
+        """将节点时间戳转为 float;无效值回退 0(无时间,前端不显示)。"""
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _parse_node_component(self, node) -> dict | None:
         """将转发消息节点组件解析为结构化子消息(不展开为纯文本)。"""
         if node is None:
@@ -272,6 +280,7 @@ class QuoteService:
             "sender_name": sender_name or PLACEHOLDER_UNKNOWN_OWNER,
             "text": "".join(parts).strip(),
             "images": images,
+            "time": self._node_time(getattr(node, "time", 0)),
         }
 
     @staticmethod
@@ -307,6 +316,7 @@ class QuoteService:
                     "sender_name": sender_name or PLACEHOLDER_UNKNOWN_OWNER,
                     "text": content.strip(),
                     "images": [],
+                    "time": self._node_time(raw.get("time")),
                 }
         if not isinstance(content, list):
             content = []
@@ -344,6 +354,7 @@ class QuoteService:
             "sender_name": sender_name or PLACEHOLDER_UNKNOWN_OWNER,
             "text": "".join(parts).strip(),
             "images": images,
+            "time": self._node_time(raw.get("time")),
         }
 
     # ---------- 图片存档 ----------
@@ -449,6 +460,7 @@ class QuoteService:
                     content=content,
                     uin=str(sub.get("sender_id") or "0"),
                     name=str(sub.get("sender_name") or PLACEHOLDER_UNKNOWN_OWNER),
+                    time=int(self._node_time(sub.get("time"))),
                 )
             )
         if not nodes:

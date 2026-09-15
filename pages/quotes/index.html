@@ -118,6 +118,7 @@
   .chat-node { width: 100%; padding: 10px 0; border-bottom: 1px solid var(--border, #e0e0e0); }
   .chat-node:last-child { border-bottom: none; }
   .chat-sender { font-weight: 600; font-size: 13px; }
+  .chat-time { font-weight: 400; font-size: 12px; color: var(--text-secondary, #888); margin-left: 6px; }
   .chat-text { margin: 4px 0 0 12px; white-space: pre-wrap; word-break: break-word; }
   .chat-images { margin-top: 8px; max-height: none; }
   .chat-img { width: 160px; min-height: 80px; }
@@ -211,7 +212,7 @@
     var d = new Date(n * 1000);
     var p = function (x) { return (x < 10 ? "0" : "") + x; };
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
-      " " + p(d.getHours()) + ":" + p(d.getMinutes());
+      " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
   }
 
   function esc(s) {
@@ -349,6 +350,12 @@
       var sender = document.createElement("div");
       sender.className = "chat-sender";
       sender.textContent = node.sender_name || "未知用户";
+      if (node.time) {
+        var t = document.createElement("span");
+        t.className = "chat-time";
+        t.textContent = fmtTime(node.time);
+        sender.appendChild(t);
+      }
       box.appendChild(sender);
       if (node.text) {
         var text = document.createElement("div");
