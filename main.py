@@ -30,7 +30,7 @@ except ImportError:  # 旧版 AstrBot 无该模块时回退为占位符记录
     ReplyChainParser = None
 
 # 插件版本(@register 与 metadata.yaml 的 version 保持一致)
-PLUGIN_VERSION = "1.3.2"
+PLUGIN_VERSION = "1.3.3"
 
 # 插件唯一识别名(数据目录 data/plugin_data/{PLUGIN_NAME},与 metadata.yaml 的 name 保持一致)
 PLUGIN_NAME = "astrbot_plugin_archiver"
