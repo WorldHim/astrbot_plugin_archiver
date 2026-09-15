@@ -183,7 +183,10 @@ class TestRudian:
         assert q.sender_name == "王五"
         # 聊天记录本体仍结构化保存
         assert q.text == "[聊天记录]"
-        assert len(q.forward_nodes) == 2
+        assert len(q.forward_nodes) == 3
+        info_node = q.forward_nodes[-1]
+        assert info_node["sender_name"] == "语录档案"
+        assert "收录人：" in info_node["text"] and "编号：" in info_node["text"]
 
 
 class TestLaidiandian:
@@ -356,7 +359,10 @@ class TestForward:
         # 归属为聊天记录最后一条消息的发送者(以 QQ 号保存)
         assert q.sender_id == "30003"
         assert q.sender_name == "李四"
-        assert len(q.forward_nodes) == 2
+        assert len(q.forward_nodes) == 3
+        info_node = q.forward_nodes[-1]
+        assert info_node["sender_name"] == "语录档案"
+        assert "收录人：" in info_node["text"] and "编号：" in info_node["text"]
         assert q.forward_nodes[0]["sender_name"] == "张三"
         assert q.forward_nodes[0]["sender_id"] == "20002"
         assert q.forward_nodes[0]["text"] == "今天天气真好"
@@ -408,7 +414,10 @@ class TestForward:
         collect(plugin.rudian(event))
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
         assert q.text == "[聊天记录]"
-        assert len(q.forward_nodes) == 1
+        assert len(q.forward_nodes) == 2
+        info_node = q.forward_nodes[-1]
+        assert info_node["sender_name"] == "语录档案"
+        assert "收录人：" in info_node["text"] and "编号：" in info_node["text"]
         assert q.forward_nodes[0]["sender_name"] == "张三"
         assert q.forward_nodes[0]["text"] == "天气真好"
 
@@ -419,7 +428,10 @@ class TestForward:
         collect(plugin.rudian(event))
         q = plugin._storage.session_quotes(UMO_GROUP)[0]
         assert q.text == "看这个\n[聊天记录]"
-        assert len(q.forward_nodes) == 2
+        assert len(q.forward_nodes) == 3
+        info_node = q.forward_nodes[-1]
+        assert info_node["sender_name"] == "语录档案"
+        assert "收录人：" in info_node["text"] and "编号：" in info_node["text"]
 
     def test_forward_owner_is_last_sender(self, plugin):
         # 归属:聊天记录取其中最后一条消息的发送者(以 QQ 号保存)

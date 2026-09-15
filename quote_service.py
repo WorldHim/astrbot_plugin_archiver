@@ -482,11 +482,24 @@ class QuoteService:
             nodes.append(
                 Node(content=[Plain(PLACEHOLDER_CHAT_RECORD)], name=INFO_NODE_NAME)
             )
-        # 最后增加一条收录信息节点
-        info = info_text if info_text is not None else self.archive_info_text(quote)
-        nodes.append(
-            Node(content=[Plain(info or "已收录语录")], name=INFO_NODE_NAME)
+        # 收录信息节点:保存的语录已含(新数据,子消息最后附一句收录信息)时,
+        # 回执场景用 info_text 更新该节点文本、回放场景原样保留;
+        # 旧数据无收录信息节点则追加
+        has_stored_info = any(
+            isinstance(sub, dict)
+            and str(sub.get("sender_name") or "") == INFO_NODE_NAME
+            for sub in quote.forward_nodes
         )
+        if has_stored_info:
+            if info_text is not None:
+                nodes[-1] = Node(
+                    content=[Plain(info_text or "已收录语录")], name=INFO_NODE_NAME
+                )
+        else:
+            info = info_text if info_text is not None else self.archive_info_text(quote)
+            nodes.append(
+                Node(content=[Plain(info or "已收录语录")], name=INFO_NODE_NAME)
+            )
         return nodes
 
     @staticmethod
@@ -506,6 +519,17 @@ class QuoteService:
         if quote.id:
             parts.append(f"编号：{quote.id[:8]}")
         return "\n".join(parts)
+
+    @staticmethod
+    def build_info_node(quote) -> dict:
+        """构造收录信息节点(收录人/收录时间/编号),附加在聊天记录子消息最后保存。"""
+        return {
+            "sender_id": "",
+            "sender_name": INFO_NODE_NAME,
+            "text": QuoteService.archive_info_text(quote),
+            "images": [],
+            "time": 0.0,
+        }
 
     @staticmethod
     def quote_code(quote) -> str:

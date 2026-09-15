@@ -136,6 +136,9 @@ class ArchiverPlugin(Star):
             archived_by_name=event.get_sender_name(),
             archived_at_ts=time.time(),
         )
+        # 聊天记录语录:子消息最后附加一句收录信息(收录人/时间/编号),一并保存进语录库
+        if forward_nodes:
+            forward_nodes.append(self._service.build_info_node(quote))
         count = self._storage.add_quote(
             umo,
             quote,
