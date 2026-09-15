@@ -258,7 +258,7 @@
       html += "<tr>"
         + '<td class="code" title="' + esc(q.id) + '">' + esc(q.code) + "</td>"
         + '<td class="sender" title="' + esc(q.sender_id) + '">' + esc(q.sender_name) + "</td>"
-        + '<td class="content"><div class="text" title="' + esc(q.text) + '">' + esc(q.text || "（无文本）") + "</div>"
+        + '<td class="content"><div class="text" title="' + esc(q.text) + '">' + esc(q.text || "") + "</div>"
         + (tags.length ? '<div class="meta">' + tags.join("") + "</div>" : "") + "</td>"
         + '<td class="session" title="' + esc(q.session) + '">' + esc(q.session) + "</td>"
         + '<td class="time">' + fmtTime(q.archived_at_ts) + "</td>"
@@ -349,11 +349,13 @@
       var sender = document.createElement("div");
       sender.className = "chat-sender";
       sender.textContent = node.sender_name || "未知用户";
-      var text = document.createElement("div");
-      text.className = "chat-text";
-      text.textContent = node.text || "（无文本）";
       box.appendChild(sender);
-      box.appendChild(text);
+      if (node.text) {
+        var text = document.createElement("div");
+        text.className = "chat-text";
+        text.textContent = node.text;
+        box.appendChild(text);
+      }
       var n = node.image_count || 0;
       if (n) {
         var imgs = document.createElement("div");
