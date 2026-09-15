@@ -384,13 +384,26 @@
       "　·　收录人：" + (data.archived_by_name || "—") +
       "　·　收录时间：" + fmtTime(data.archived_at_ts);
     body.appendChild(meta);
-    if (data.text && data.text !== "[聊天记录]") {
-      var t = document.createElement("div");
-      t.className = "chat-text";
-      t.textContent = data.text;
-      body.appendChild(t);
+    // 主消息:与聊天记录子消息同样形态(发送人 + 内容);
+    // 纯聊天记录(无外层文本)时不显示主消息节点
+    var mainText = (data.text || "").replace("[聊天记录]", "").trim();
+    var hasNodes = (data.forward_nodes || []).length > 0;
+    if (mainText || !hasNodes) {
+      var mainBox = document.createElement("div");
+      mainBox.className = "chat-node";
+      var mainSender = document.createElement("div");
+      mainSender.className = "chat-sender";
+      mainSender.textContent = data.sender_name || "未知用户";
+      mainBox.appendChild(mainSender);
+      if (mainText) {
+        var t = document.createElement("div");
+        t.className = "chat-text";
+        t.textContent = mainText;
+        mainBox.appendChild(t);
+      }
+      body.appendChild(mainBox);
+      appendImages(body, data, -1, data.image_count || 0);
     }
-    appendImages(body, data, -1, data.image_count || 0);
     (data.forward_nodes || []).forEach(function (node, nd) {
       var box = document.createElement("div");
       box.className = "chat-node";
@@ -413,9 +426,6 @@
       body.appendChild(box);
       appendImages(body, data, nd, node.image_count || 0);
     });
-    if (!body.children.length) {
-      body.innerHTML = '<p class="empty">该语录没有内容。</p>';
-    }
   }
 
   function openPreview(item) {
