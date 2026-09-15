@@ -821,13 +821,14 @@ class TestPermission:
         assert plugin._storage.session_count(UMO_GROUP) == 1
 
     def test_delete_permission_denied(self, tmp_path):
-        # delete_permission=Bot管理员 → 非 Bot 管理员拒绝删除
+        # delete_permission=Bot管理员 → 非 Bot 管理员、非归属者拒绝删除
         plugin = _plugin_with_config(tmp_path, {"delete_permission": "Bot管理员"})
         q = make_quote()
         plugin._storage.add_quote(UMO_GROUP, q)
         event = FakeEvent(message=[make_reply(id=q.message_id, chain=[])])
         results = collect(plugin.shandian(event))
-        assert "权限" in results[0][1]
+        # owner_delete 默认开启:非归属者收到"只能删除自己的语录"提示
+        assert "只能删除" in results[0][1]
         assert plugin._storage.session_count(UMO_GROUP) == 1
 
     def test_delete_permission_admin_allowed(self, tmp_path):
@@ -843,14 +844,60 @@ class TestPermission:
         assert plugin._storage.session_count(UMO_GROUP) == 0
 
     def test_default_permission(self, plugin):
-        # 默认:上传=群员(所有人可上传),删除=管理员(非管理员拒绝删除)
+        # 默认:上传=群员(所有人可上传),删除=管理员(非管理员非归属者拒绝删除)
         event = make_reply_event(make_reply())
         results = collect(plugin.rudian(event))
         assert plugin._storage.session_count(UMO_GROUP) == 1
         del_event = FakeEvent(message=[make_reply(id="msg-001", chain=[])])
         del_results = collect(plugin.shandian(del_event))
-        assert "权限" in del_results[0][1]
+        assert "只能删除" in del_results[0][1]
         assert plugin._storage.session_count(UMO_GROUP) == 1
+
+
+class TestOwnerDelete:
+    def test_owner_can_delete_own_quote(self, tmp_path):
+        # owner_delete 开启(默认) → 归属者本人(非管理员)可删除自己的语录
+        plugin = _plugin_with_config(tmp_path, {"delete_permission": "Bot管理员"})
+        q = make_quote(sender_id="10001")  # 归属者 = 发起者(uid 默认 10001)
+        plugin._storage.add_quote(UMO_GROUP, q)
+        event = FakeEvent(message=[make_reply(id=q.message_id, chain=[])])
+        results = collect(plugin.shandian(event))
+        assert "已删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
+    def test_non_owner_denied(self, tmp_path):
+        # 非归属者且不满足权限级别 → 拒绝
+        plugin = _plugin_with_config(tmp_path, {"delete_permission": "Bot管理员"})
+        q = make_quote(sender_id="20002")
+        plugin._storage.add_quote(UMO_GROUP, q)
+        event = FakeEvent(message=[make_reply(id=q.message_id, chain=[])], uid="10001")
+        results = collect(plugin.shandian(event))
+        assert "只能删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 1
+
+    def test_owner_delete_disabled(self, tmp_path):
+        # owner_delete 关闭 → 归属者也受权限级别限制
+        plugin = _plugin_with_config(
+            tmp_path, {"delete_permission": "Bot管理员", "owner_delete": False}
+        )
+        q = make_quote(sender_id="10001")
+        plugin._storage.add_quote(UMO_GROUP, q)
+        event = FakeEvent(message=[make_reply(id=q.message_id, chain=[])])
+        results = collect(plugin.shandian(event))
+        assert "权限" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 1
+
+    def test_admin_still_bypasses(self, tmp_path):
+        # 管理员仍可删除任意语录(不受 owner_delete 影响)
+        plugin = _plugin_with_config(tmp_path, {"delete_permission": "Bot管理员"})
+        q = make_quote(sender_id="20002")
+        plugin._storage.add_quote(UMO_GROUP, q)
+        event = FakeEvent(
+            message=[make_reply(id=q.message_id, chain=[])], is_admin=True
+        )
+        results = collect(plugin.shandian(event))
+        assert "已删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
 
 
 class TestConfig:

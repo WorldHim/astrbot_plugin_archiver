@@ -19,6 +19,12 @@
     "options": ["群员", "管理员", "群主", "Bot管理员"],
     "default": "管理员"
   },
+  "owner_delete": {
+    "description": "允许语录归属者删除自己的语录",
+    "hint": "开启后,语录归属人(被收录语录的说话人,以QQ号匹配)即使不满足删除权限级别,也可删除归属为自己的语录",
+    "type": "bool",
+    "default": true
+  },
   "session_quote_limit": {
     "description": "每个会话语录库的收录上限(条)",
     "hint": "超出后自动淘汰最早的语录;0 表示不限制",

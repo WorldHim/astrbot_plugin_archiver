@@ -925,9 +925,13 @@ class ArchiverPlugin(Star):
     @filter.command("删除", alias={"删除语录"})
     async def shandian(self, event: AstrMessageEvent, code: str = ""):
         """回复语录消息或被收录的原消息发送 /删除 删除;也可 /删除 <编号>"""
-        if not await self._check_permission(
+        # 权限判定:级别通过可删任意语录;级别不通过时,若开启归属者删除,
+        # 定位到语录后仅归属人本人(以QQ号匹配)可删自己的语录
+        level_permitted = await self._check_permission(
             event, self._cfg("delete_permission", "管理员")
-        ):
+        )
+        owner_delete_enabled = self._cfg_bool("owner_delete", True)
+        if not level_permitted and not owner_delete_enabled:
             yield event.plain_result("你没有删除语录的权限。")
             return
         reply = self._find_reply(event)
@@ -966,12 +970,21 @@ class ArchiverPlugin(Star):
         if quote is None:
             if code:
                 yield event.plain_result(f"没有找到编号为「{code}」的语录。")
-            else:
+            elif level_permitted:
                 yield event.plain_result(
                     "请回复语录消息或被收录的原消息发送 /删除，"
                     "或使用 /删除 <编号> 删除（编号见语录消息末尾收录信息）。"
                 )
+            else:
+                yield event.plain_result("没有找到可删除的语录。")
             return
+
+        # 级别不通过时,仅语录归属人本人可删除
+        if not level_permitted:
+            sender_id = str(event.get_sender_id() or "").strip()
+            if quote.sender_id != sender_id:
+                yield event.plain_result("你只能删除归属为自己的语录。")
+                return
 
         self._storage.delete_quote(quote.session, quote.id)
         # 同步清理该语录的已发送消息映射记录
