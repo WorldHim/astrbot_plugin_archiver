@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>语录管理</title>
+<script src="/api/plugin/page/bridge-sdk.js"></script>
+<style>
+  :root {
+    --bg: #f5f7fa; --panel: #ffffff; --text: #1f2329; --text-sub: #646a73;
+    --border: #e5e6eb; --primary: #3370ff; --primary-hover: #2b5fd9;
+    --danger: #f54a45; --danger-hover: #e33e39; --tag-bg: #f2f3f5;
+    --hover: #f5f7fa; --input-bg: #ffffff;
+  }
+  [data-theme="dark"] {
+    --bg: #17181a; --panel: #212224; --text: #e8e8e8; --text-sub: #9b9fa8;
+    --border: #333537; --primary: #5286ff; --primary-hover: #6e9bff;
+    --danger: #f76964; --danger-hover: #ff8a86; --tag-bg: #2c2e30;
+    --hover: #2a2b2d; --input-bg: #17181a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); padding: 16px 20px 32px; font-size: 14px;
+  }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  .badge {
+    background: var(--tag-bg); color: var(--text-sub); border-radius: 10px;
+    padding: 2px 10px; font-size: 12px;
+  }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+  .toolbar select, .toolbar input {
+    background: var(--input-bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; outline: none;
+  }
+  .toolbar input { flex: 1; min-width: 160px; max-width: 280px; }
+  .toolbar select:focus, .toolbar input:focus { border-color: var(--primary); }
+  button {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover { background: var(--primary-hover); }
+  button.danger-link {
+    background: transparent; border: none; color: var(--danger);
+    padding: 4px 8px; font-size: 13px;
+  }
+  button.danger-link:hover { background: var(--danger-bg); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .alert { display: none; border-radius: 6px; padding: 9px 14px; margin-bottom: 12px; font-size: 13px; }
+  .alert.show { display: block; }
+  .alert.error { background: var(--danger-bg); color: var(--danger); }
+  .alert.success { background: #e8f7ee; color: #14a356; }
+  [data-theme="dark"] .alert.success { background: #17352a; color: #3ddc97; }
+  .table-wrap {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: auto;
+  }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th {
+    font-size: 12px; color: var(--text-sub); font-weight: 500;
+    background: var(--tag-bg); white-space: nowrap;
+  }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.code { font-family: Consolas, monospace; font-size: 12px; color: var(--text-sub); white-space: nowrap; }
+  td.sender { white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+  td.content { max-width: 380px; }
+  td.content .text {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; word-break: break-all; line-height: 1.5;
+  }
+  td.content .meta { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag {
+    background: var(--tag-bg); color: var(--text-sub); border-radius: 4px;
+    padding: 1px 7px; font-size: 11px; white-space: nowrap;
+  }
+  td.session { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-sub); font-size: 12px; }
+  td.time { white-space: nowrap; color: var(--text-sub); font-size: 12px; }
+  td.op { white-space: nowrap; }
+  .empty { text-align: center; color: var(--text-sub); padding: 48px 0 !important; }
+  .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; font-size: 13px; color: var(--text-sub); }
+  .modal-mask {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    z-index: 10; align-items: center; justify-content: center;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: var(--panel); border-radius: 10px; width: min(640px, 92vw);
+    max-height: 86vh; display: flex; flex-direction: column; padding: 18px 20px;
+  }
+  .modal h2 { font-size: 16px; margin-bottom: 10px; }
+  .modal p.hint { font-size: 12px; color: var(--text-sub); margin-bottom: 10px; line-height: 1.6; }
+  .modal textarea {
+    flex: 1; min-height: 220px; resize: vertical; border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px; font-family: Consolas, monospace; font-size: 12px;
+    background: var(--input-bg); color: var(--text); outline: none; margin-bottom: 10px;
+  }
+  .modal textarea:focus { border-color: var(--primary); }
+  .modal .row { display: flex; gap: 8px; align-items: center; }
+  .modal .row .spacer { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>语录管理</h1>
+  <span class="badge" id="total-badge">共 0 条</span>
+</header>
+<div class="alert" id="alert"></div>
+<div class="toolbar">
+  <select id="session-filter"><option value="">全部会话</option></select>
+  <input id="keyword" type="search" placeholder="搜索文本 / 发送人 / 编号">
+  <button id="btn-search" class="primary">搜索</button>
+  <button id="btn-import">导入</button>
+  <button id="btn-refresh">刷新</button>
+</div>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>编号</th><th>发送人</th><th>内容</th><th>会话</th><th>收录时间</th><th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+  </table>
+</div>
+<div class="pagination">
+  <span id="page-info"></span>
+  <button id="btn-prev">上一页</button>
+  <button id="btn-next">下一页</button>
+</div>
+<div class="modal-mask" id="import-mask">
+  <div class="modal">
+    <h2>导入语录</h2>
+    <p class="hint">
+      粘贴 JSON 数据或选择文件导入。支持本插件导出格式（数组或
+      {"quotes":[...]}）与旧版 quotes.json（{"sessions":{...}}）。
+      按语录 ID 去重，已存在的语录跳过不覆盖。
+    </p>
+    <textarea id="import-text" placeholder='[{"id": "...", "sender_id": "123", "sender_name": "某人", "text": "内容"}]'></textarea>
+    <div class="row">
+      <input type="file" id="import-file" accept=".json,application/json">
+      <span class="spacer"></span>
+      <button id="btn-cancel">取消</button>
+      <button id="btn-do-import" class="primary">导入</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var bridge = window.AstrBotPluginPage;
+  if (!bridge) {
+    // bridge 未加载(理论上 head 中同步引入不会发生):给出可见的错误提示
+    document.addEventListener("DOMContentLoaded", function () {
+      document.body.innerHTML =
+        '<p style="color:#f54a45;padding:16px;">加载失败：AstrBotPluginPage bridge 不可用，请刷新页面或检查插件版本。</p>';
+    });
+    return;
+  }
+  var state = { page: 1, pageSize: 20, total: 0, keyword: "", session: "" };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function showAlert(kind, text) {
+    var el = $("alert");
+    el.className = "alert show " + kind;
+    el.textContent = text;
+    clearTimeout(showAlert._t);
+    showAlert._t = setTimeout(function () { el.className = "alert"; }, 4000);
+  }
+
+  function applyTheme(ctx) {
+    if (ctx && ctx.isDark) document.documentElement.dataset.theme = "dark";
+  }
+
+  function fmtTime(ts) {
+    var n = Number(ts) || 0;
+    if (!n) return "—";
+    var d = new Date(n * 1000);
+    var p = function (x) { return (x < 10 ? "0" : "") + x; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function totalPage() {
+    return Math.max(1, Math.ceil(state.total / state.pageSize));
+  }
+
+  function renderSessions(sessions) {
+    var sel = $("session-filter");
+    var current = state.session;
+    sel.innerHTML = '<option value="">全部会话</option>';
+    (sessions || []).forEach(function (s) {
+      var opt = document.createElement("option");
+      opt.value = s.session;
+      opt.textContent = s.session + "（" + s.count + "）";
+      sel.appendChild(opt);
+    });
+    sel.value = current || "";
+  }
+
+  function renderRows(quotes) {
+    var tbody = $("tbody");
+    if (!quotes || !quotes.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无语录</td></tr>';
+      return;
+    }
+    var html = "";
+    quotes.forEach(function (q) {
+      var tags = [];
+      if (q.image_count > 0) tags.push('<span class="tag">图片 ×' + q.image_count + "</span>");
+      if (q.forward_count > 0) tags.push('<span class="tag">聊天记录 ×' + q.forward_count + "</span>");
+      html += "<tr>"
+        + '<td class="code" title="' + esc(q.id) + '">' + esc(q.code) + "</td>"
+        + '<td class="sender" title="' + esc(q.sender_id) + '">' + esc(q.sender_name) + "</td>"
+        + '<td class="content"><div class="text" title="' + esc(q.text) + '">' + esc(q.text || "（无文本）") + "</div>"
+        + (tags.length ? '<div class="meta">' + tags.join("") + "</div>" : "") + "</td>"
+        + '<td class="session" title="' + esc(q.session) + '">' + esc(q.session) + "</td>"
+        + '<td class="time">' + fmtTime(q.archived_at_ts) + "</td>"
+        + '<td class="op"><button class="danger-link" data-del="' + esc(q.id) + '" data-session="' + esc(q.session) + '">删除</button></td>'
+        + "</tr>";
+    });
+    tbody.innerHTML = html;
+  }
+
+  function renderPager() {
+    $("total-badge").textContent = "共 " + state.total + " 条";
+    $("page-info").textContent = "第 " + state.page + " / " + totalPage() + " 页";
+    $("btn-prev").disabled = state.page <= 1;
+    $("btn-next").disabled = state.page >= totalPage();
+  }
+
+  async function loadQuotes() {
+    var tbody = $("tbody");
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">加载中…</td></tr>';
+    try {
+      // bridge 返回值即信封中的 data(父窗口已解包;出错时直接抛 Error)
+      var data = (await bridge.apiGet("api/quotes", {
+        page: state.page,
+        page_size: state.pageSize,
+        keyword: state.keyword,
+        session: state.session,
+      })) || {};
+      state.total = data.total || 0;
+      renderRows(data.quotes);
+      renderPager();
+    } catch (e) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">加载失败：' + esc(e.message || e) + "</td></tr>";
+    }
+  }
+
+  async function loadSessions() {
+    try {
+      var data = await bridge.apiGet("api/sessions", {});
+      if (data) renderSessions(data.sessions);
+    } catch (e) { /* 筛选下拉加载失败不阻塞列表 */ }
+  }
+
+  async function deleteQuote(id, session) {
+    if (!window.confirm("确定删除编号为 " + id.slice(0, 8) + " 的语录吗？此操作不可恢复。")) {
+      return;
+    }
+    try {
+      await bridge.apiPost("api/quotes/delete", { id: id, session: session });
+      showAlert("success", "已删除编号为 " + id.slice(0, 8) + " 的语录。");
+      await loadSessions();
+      await loadQuotes();
+    } catch (e) {
+      showAlert("error", "删除失败：" + (e.message || e));
+    }
+  }
+
+  async function doImport(text) {
+    var payload;
+    try {
+      payload = JSON.parse(text);
+    } catch (e) {
+      showAlert("error", "JSON 解析失败，请检查数据格式。");
+      return;
+    }
+    var btn = $("btn-do-import");
+    btn.disabled = true;
+    try {
+      var data = (await bridge.apiPost("api/quotes/import", { quotes: payload })) || {};
+      showAlert("success", "导入完成：新增 " + (data.added || 0) + " 条，跳过 " + (data.skipped || 0) + " 条。");
+      $("import-mask").classList.remove("show");
+      $("import-text").value = "";
+      $("import-file").value = "";
+      state.page = 1;
+      await loadSessions();
+      await loadQuotes();
+    } catch (e) {
+      showAlert("error", "导入失败：" + (e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function bind() {
+    $("btn-search").addEventListener("click", function () {
+      state.keyword = $("keyword").value.trim();
+      state.session = $("session-filter").value;
+      state.page = 1;
+      loadQuotes();
+    });
+    $("keyword").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") $("btn-search").click();
+    });
+    $("session-filter").addEventListener("change", function () {
+      state.session = this.value;
+      state.page = 1;
+      loadQuotes();
+    });
+    $("btn-refresh").addEventListener("click", async function () {
+      state.keyword = $("keyword").value.trim();
+      state.session = $("session-filter").value;
+      await loadSessions();
+      await loadQuotes();
+    });
+    $("btn-prev").addEventListener("click", function () {
+      if (state.page > 1) { state.page -= 1; loadQuotes(); }
+    });
+    $("btn-next").addEventListener("click", function () {
+      if (state.page < totalPage()) { state.page += 1; loadQuotes(); }
+    });
+    $("btn-import").addEventListener("click", function () {
+      $("import-mask").classList.add("show");
+    });
+    $("btn-cancel").addEventListener("click", function () {
+      $("import-mask").classList.remove("show");
+    });
+    $("import-mask").addEventListener("click", function (e) {
+      if (e.target === this) this.classList.remove("show");
+    });
+    $("import-file").addEventListener("change", function () {
+      var file = this.files && this.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () { $("import-text").value = String(reader.result || ""); };
+      reader.readAsText(file, "utf-8");
+    });
+    $("btn-do-import").addEventListener("click", function () {
+      var text = $("import-text").value.trim();
+      if (!text) {
+        showAlert("error", "请先粘贴 JSON 数据或选择文件。");
+        return;
+      }
+      doImport(text);
+    });
+    $("tbody").addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-del]");
+      if (btn) deleteQuote(btn.dataset.del, btn.dataset.session);
+    });
+  }
+
+  async function init() {
+    try {
+      await bridge.ready();
+      applyTheme(bridge.getContext());
+    } catch (e) { /* bridge 未就绪时仍尝试渲染 */ }
+    bind();
+    await loadSessions();
+    await loadQuotes();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

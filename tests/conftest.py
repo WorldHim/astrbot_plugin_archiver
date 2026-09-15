@@ -249,11 +249,47 @@ def _install_astrbot_stubs():
         get_data_dir=lambda n: Path(_BASE[0]) / n
     )
 
+    fake_web = types.ModuleType("astrbot.api.web")
+
+    class _PluginMultiDict:
+        """PluginMultiDict stub:dict 风格 get/getlist。"""
+
+        def __init__(self, items=None):
+            self._data = dict(items or {})
+
+        def get(self, key, default=None):
+            return self._data.get(key, default)
+
+        def getlist(self, key):
+            value = self._data.get(key)
+            return [value] if value is not None else []
+
+    class _PluginRequestProxy:
+        """模块级请求代理 stub;测试通过替换实例属性注入 fake 请求。"""
+
+        def __init__(self):
+            self.query = _PluginMultiDict()
+            self._json_body = None
+
+        async def json(self, default=None):
+            if self._json_body is not None:
+                return self._json_body
+            return default
+
+    fake_web.PluginMultiDict = _PluginMultiDict
+    fake_web.request = _PluginRequestProxy()
+    fake_web.json_response = lambda data=None, **kwargs: data
+    fake_web.error_response = lambda message, **kwargs: {
+        "status": "error",
+        "message": message,
+    }
+
     sys.modules["astrbot"] = fake_astrbot
     sys.modules["astrbot.api"] = fake_api
     sys.modules["astrbot.api.event"] = fake_event_mod
     sys.modules["astrbot.api.message_components"] = fake_components
     sys.modules["astrbot.api.star"] = fake_star_mod
+    sys.modules["astrbot.api.web"] = fake_web
     sys.modules["astrbot.core"] = fake_core
     sys.modules["astrbot.core.utils"] = fake_utils
     sys.modules["astrbot.core.utils.quoted_message"] = fake_quoted
@@ -272,7 +308,13 @@ UMO_OTHER = "aiocqhttp:GroupMessage:99999"
 
 
 class FakeContext:
-    pass
+    """模拟插件 Context:记录注册的 Web API 供测试断言。"""
+
+    def __init__(self):
+        self.registered_web_apis = []
+
+    def register_web_api(self, route, handler, methods, desc):
+        self.registered_web_apis.append((route, handler, list(methods), desc))
 
 
 class FakeBotApi:

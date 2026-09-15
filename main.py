@@ -19,6 +19,7 @@ from .constants import (
 from .models import Quote
 from .quote_service import QuoteService
 from .storage import QuoteStorage
+from .web_api import register_web_apis
 
 
 @register(
@@ -41,6 +42,8 @@ class ArchiverPlugin(Star):
         self._config = config
         self._storage = QuoteStorage(PLUGIN_NAME)
         self._service = QuoteService(self._storage, config)
+        # 注册 WebUI 管理 API(查看/删除/导入,页面位于 pages/quotes)
+        register_web_apis(self._storage, context)
 
     # ---------- 配置读取(委托 service) ----------
 

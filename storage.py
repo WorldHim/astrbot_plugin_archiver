@@ -474,3 +474,95 @@ class QuoteStorage:
         except (OSError, ValueError):
             return None
         return full if full.is_file() else None
+
+    # ---------- WebUI 管理查询 ----------
+
+    def list_quotes(
+        self,
+        session: str | None = None,
+        keyword: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[Quote], int]:
+        """分页查询语录(可按会话与关键词筛选),按收录时间倒序。
+
+        Args:
+            session: 限定会话(unified_msg_origin);None 表示全部会话。
+            keyword: 关键词,匹配文本/发送人昵称/发送人 ID/语录编号。
+            page: 页码(从 1 开始);非法值按 1 处理。
+            page_size: 每页条数;非法或非正数时按默认值处理。
+
+        Returns:
+            (quotes, total):当前页语录列表与筛选后的总条数。
+        """
+        try:
+            page = int(page)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(page_size)
+        except (TypeError, ValueError):
+            page_size = 20
+        if page < 1:
+            page = 1
+        if page_size < 1 or page_size > 200:
+            page_size = 20
+
+        where: list[str] = []
+        params: list = []
+        if session:
+            where.append("session = ?")
+            params.append(session)
+        keyword = str(keyword or "").strip()
+        if keyword:
+            like = f"%{keyword}%"
+            where.append(
+                "(text LIKE ? OR sender_name LIKE ? OR sender_id LIKE ? OR id LIKE ?)"
+            )
+            params.extend([like, like, like, like])
+        where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+
+        with self._db() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM quotes{where_sql}", params
+            ).fetchone()
+            total = int(row["n"]) if row is not None else 0
+            rows = conn.execute(
+                f"SELECT * FROM quotes{where_sql} "
+                "ORDER BY archived_at_ts DESC, rowid DESC LIMIT ? OFFSET ?",
+                [*params, page_size, (page - 1) * page_size],
+            ).fetchall()
+        return self._rows_to_quotes(rows), total
+
+    def list_sessions(self) -> list[dict]:
+        """返回出现过的会话统计(session/条数),按条数倒序。"""
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT session, COUNT(*) AS n FROM quotes "
+                "GROUP BY session ORDER BY n DESC"
+            ).fetchall()
+        return [
+            {"session": str(row["session"]), "count": int(row["n"])}
+            for row in rows
+        ]
+
+    def import_quotes(self, quotes: list[Quote]) -> tuple[int, int]:
+        """批量导入语录(按语录 ID 去重),返回 (added, skipped)。
+
+        ID 已存在的语录跳过不覆盖;forward_nodes 内的子消息按原样保留。
+        """
+        added = 0
+        skipped = 0
+        with self._db() as conn:
+            for quote in quotes:
+                row = conn.execute(
+                    "SELECT 1 FROM quotes WHERE id = ? LIMIT 1", (quote.id,)
+                ).fetchone()
+                if row is not None:
+                    skipped += 1
+                    continue
+                conn.execute(
+                    self._insert_sql("IGNORE"), self._quote_params(quote)
+                )
+                added += 1
+        return added, skipped
