@@ -34,6 +34,9 @@ def register_web_apis(storage: QuoteStorage, context) -> None:
         f"{prefix}/image", api.get_image, ["GET"], "获取语录图片(base64 或远程 URL)"
     )
     context.register_web_api(
+        f"{prefix}/quote_detail", api.get_quote_detail, ["GET"], "获取语录详情(含聊天记录内容)"
+    )
+    context.register_web_api(
         f"{prefix}/quotes/delete", api.delete_quote, ["POST"], "删除指定语录"
     )
     context.register_web_api(
@@ -105,6 +108,26 @@ class QuoteWebApi:
         except Exception as e:
             logger.error(f"[archiver] webui list sessions failed: {e}")
             return _err(f"查询会话失败:{e}")
+
+    async def get_quote_detail(self, **_kwargs) -> dict:
+        """GET {prefix}/quote_detail?quote_id=&session= 获取语录详情。
+
+        含聊天记录(合并转发)子消息的发送人/文本/图片数量,供 WebUI
+        弹窗按需展示完整内容;图片本体经 {prefix}/image 按序号加载。
+        """
+        try:
+            query = request.query
+            quote_id = str(query.get("quote_id", "") or "").strip()
+            if not quote_id:
+                return _err("缺少语录编号(quote_id)")
+            session = str(query.get("session", "") or "").strip()
+            quote = self._locate_quote(quote_id, session)
+            if quote is None:
+                return _err("没有找到该语录,请刷新后重试")
+            return _ok(self._detail_payload(quote))
+        except Exception as e:
+            logger.error(f"[archiver] webui quote detail failed: {e}")
+            return _err(f"获取语录详情失败:{e}")
 
     async def get_image(self, **_kwargs) -> dict:
         """GET {prefix}/image?quote_id=&index=&node= 获取语录图片。
@@ -261,6 +284,29 @@ class QuoteWebApi:
         if node < len(quote.forward_nodes):
             return quote.forward_nodes[node].get("images") or []
         return None
+
+    @staticmethod
+    def _detail_payload(quote: Quote) -> dict:
+        """序列化语录详情(含聊天记录子消息,不含图片本体)。"""
+        return {
+            "id": quote.id,
+            "code": quote.id[:8],
+            "sender_id": quote.sender_id,
+            "sender_name": quote.sender_name,
+            "text": quote.text,
+            "session": quote.session,
+            "image_count": len(quote.images),
+            "archived_by_name": quote.archived_by_name,
+            "archived_at_ts": quote.archived_at_ts,
+            "forward_nodes": [
+                {
+                    "sender_name": str(node.get("sender_name") or ""),
+                    "text": str(node.get("text") or ""),
+                    "image_count": len(node.get("images") or []),
+                }
+                for node in quote.forward_nodes
+            ],
+        }
 
     @staticmethod
     def _quote_payload(quote: Quote) -> dict:

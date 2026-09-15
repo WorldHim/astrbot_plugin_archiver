@@ -367,3 +367,61 @@ class TestImage:
         api = web_api.QuoteWebApi(plugin._storage)
         res = asyncio_run(api.get_image())
         assert res["status"] == "error"
+
+
+class TestQuoteDetail:
+    def test_detail_forward_nodes(self, plugin, monkeypatch):
+        q = make_quote(
+            message_id="det-0001",
+            text="[聊天记录]",
+            forward_nodes=[
+                {
+                    "sender_id": "10001",
+                    "sender_name": "用户A",
+                    "text": "第一句",
+                    "images": [{"url": "https://example.com/a.jpg"}],
+                },
+                {
+                    "sender_id": "10002",
+                    "sender_name": "用户B",
+                    "text": "第二句",
+                    "images": [],
+                },
+            ],
+        )
+        plugin._storage.add_quote(UMO_GROUP, q)
+        _patch_request(
+            monkeypatch, query={"quote_id": "det-0001", "session": UMO_GROUP}
+        )
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_quote_detail())
+        assert res["status"] == "ok"
+        nodes = res["data"]["forward_nodes"]
+        assert len(nodes) == 2
+        assert nodes[0]["sender_name"] == "用户A"
+        assert nodes[0]["text"] == "第一句"
+        assert nodes[0]["image_count"] == 1
+        assert nodes[1]["image_count"] == 0
+
+    def test_detail_plain_quote(self, plugin, monkeypatch):
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(message_id="det-0002", text="普通语录")
+        )
+        _patch_request(monkeypatch, query={"quote_id": "det-0002"})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_quote_detail())
+        assert res["status"] == "ok"
+        assert res["data"]["forward_nodes"] == []
+        assert res["data"]["text"] == "普通语录"
+
+    def test_detail_not_found(self, plugin, monkeypatch):
+        _patch_request(monkeypatch, query={"quote_id": "no-such"})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_quote_detail())
+        assert res["status"] == "error"
+
+    def test_detail_missing_id(self, plugin, monkeypatch):
+        _patch_request(monkeypatch, query={})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_quote_detail())
+        assert res["status"] == "error"
