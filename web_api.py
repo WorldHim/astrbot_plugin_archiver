@@ -12,7 +12,7 @@ import uuid
 from astrbot.api import logger
 from astrbot.api.web import request
 
-from .constants import PLUGIN_NAME
+from .constants import INFO_NODE_NAME, PLUGIN_NAME
 from .models import Quote
 from .storage import QuoteStorage
 
@@ -329,6 +329,22 @@ class QuoteWebApi:
         return None
 
     @staticmethod
+    def _chat_nodes(quote: Quote) -> list:
+        """聊天记录子消息(排除末尾附加的收录信息节点"语录档案")。
+
+        收录信息是元数据,在语录信息弹窗中展示;内容预览与子消息计数
+        只应包含聊天记录的原始子消息。
+        """
+        return [
+            node
+            for node in quote.forward_nodes
+            if not (
+                isinstance(node, dict)
+                and str(node.get("sender_name") or "") == INFO_NODE_NAME
+            )
+        ]
+
+    @staticmethod
     def _detail_payload(quote: Quote) -> dict:
         """序列化语录详情(含聊天记录子消息,不含图片本体)。"""
         return {
@@ -348,7 +364,8 @@ class QuoteWebApi:
                     "image_count": len(node.get("images") or []),
                     "time": float(node.get("time") or 0),
                 }
-                for node in quote.forward_nodes
+                for node in QuoteWebApi._chat_nodes(quote)
+                if isinstance(node, dict)
             ],
         }
 
@@ -364,9 +381,11 @@ class QuoteWebApi:
             "sender_name": quote.sender_name,
             "text": quote.text,
             "image_count": len(quote.images),
-            "forward_count": len(quote.forward_nodes),
+            "forward_count": len(QuoteWebApi._chat_nodes(quote)),
             "forward_images": [
-                len(node.get("images") or []) for node in quote.forward_nodes
+                len(node.get("images") or [])
+                for node in QuoteWebApi._chat_nodes(quote)
+                if isinstance(node, dict)
             ],
             "archived_by_name": quote.archived_by_name,
             "archived_at_ts": quote.archived_at_ts,
