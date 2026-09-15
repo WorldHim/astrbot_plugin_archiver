@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 # 插件版本(@register 与 metadata.yaml 的 version 保持一致)
-PLUGIN_VERSION = "1.4.1"
+PLUGIN_VERSION = "1.4.2"
 
 # 插件唯一识别名(数据目录 data/plugin_data/{PLUGIN_NAME},与 metadata.yaml 的 name 保持一致)
 PLUGIN_NAME = "astrbot_plugin_archiver"
