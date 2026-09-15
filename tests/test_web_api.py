@@ -429,3 +429,80 @@ class TestQuoteDetail:
         api = web_api.QuoteWebApi(plugin._storage)
         res = asyncio_run(api.get_quote_detail())
         assert res["status"] == "error"
+
+
+class TestBatchDelete:
+    """POST {prefix}/quotes/batch_delete:批量删除选中的语录。"""
+
+    def test_batch_delete_success(self, plugin, monkeypatch):
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="bd-0001", text="一")
+        )
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="bd-0002", text="二")
+        )
+        _patch_request(
+            monkeypatch,
+            body={
+                "items": [
+                    {"id": "bd-0001", "session": UMO_GROUP},
+                    {"id": "bd-0002", "session": UMO_GROUP},
+                ]
+            },
+        )
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.batch_delete_quotes())
+        assert res["status"] == "ok"
+        assert len(res["data"]["deleted"]) == 2
+        assert res["data"]["failed"] == []
+        quotes, total = plugin._storage.list_quotes()
+        assert total == 0
+
+    def test_batch_delete_partial_not_found(self, plugin, monkeypatch):
+        # 部分语录不存在:存在的一条删除,失败的一条记录原因,互不影响
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="bd-0003", text="存在")
+        )
+        _patch_request(
+            monkeypatch,
+            body={
+                "items": [
+                    {"id": "bd-0003", "session": UMO_GROUP},
+                    {"id": "no-such-2", "session": UMO_GROUP},
+                ]
+            },
+        )
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.batch_delete_quotes())
+        assert res["status"] == "ok"
+        assert len(res["data"]["deleted"]) == 1
+        assert len(res["data"]["failed"]) == 1
+        assert res["data"]["failed"][0]["id"] == "no-such-2"
+
+    def test_batch_delete_cleans_sent_mapping(self, plugin, monkeypatch):
+        q = make_quote(umo=UMO_GROUP, message_id="bd-0004", text="映射")
+        plugin._storage.add_quote(UMO_GROUP, q)
+        plugin._storage.record_sent_message(UMO_GROUP, "sent-bd-1", q.id)
+        _patch_request(
+            monkeypatch,
+            body={"items": [{"id": q.id, "session": UMO_GROUP}]},
+        )
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.batch_delete_quotes())
+        assert res["status"] == "ok"
+        assert (
+            plugin._storage.find_quote_id_by_sent_message(UMO_GROUP, "sent-bd-1")
+            is None
+        )
+
+    def test_batch_delete_empty_items(self, plugin, monkeypatch):
+        _patch_request(monkeypatch, body={"items": []})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.batch_delete_quotes())
+        assert res["status"] == "error"
+
+    def test_batch_delete_missing_items(self, plugin, monkeypatch):
+        _patch_request(monkeypatch, body={})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.batch_delete_quotes())
+        assert res["status"] == "error"

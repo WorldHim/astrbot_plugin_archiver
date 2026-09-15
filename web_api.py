@@ -40,6 +40,9 @@ def register_web_apis(storage: QuoteStorage, context) -> None:
         f"{prefix}/quotes/delete", api.delete_quote, ["POST"], "删除指定语录"
     )
     context.register_web_api(
+        f"{prefix}/quotes/batch_delete", api.batch_delete_quotes, ["POST"], "批量删除选中的语录"
+    )
+    context.register_web_api(
         f"{prefix}/quotes/import", api.import_quotes, ["POST"], "批量导入语录(JSON)"
     )
 
@@ -205,6 +208,46 @@ class QuoteWebApi:
         except Exception as e:
             logger.error(f"[archiver] webui delete quote failed: {e}")
             return _err(f"删除语录失败:{e}")
+
+    async def batch_delete_quotes(self, **_kwargs) -> dict:
+        """POST {prefix}/quotes/batch_delete,body: {"items": [{"id": "...", "session": "..."}]}。
+
+        批量删除多条语录(每条按编号定位,同步清理消息映射);
+        返回删除明细与失败项(未找到/格式错误),互不影响。
+        """
+        try:
+            body = await request.json(default={})
+            if not isinstance(body, dict):
+                return _err("请求体格式错误,应为 JSON 对象")
+            items = body.get("items")
+            if not isinstance(items, list) or not items:
+                return _err("没有选中要删除的语录")
+            deleted, failed = [], []
+            for item in items:
+                if not isinstance(item, dict):
+                    failed.append({"item": item, "reason": "格式错误"})
+                    continue
+                quote_id = str(item.get("id") or "").strip()
+                if not quote_id:
+                    failed.append({"item": item, "reason": "缺少语录编号"})
+                    continue
+                quote = self._locate_quote(
+                    quote_id, str(item.get("session") or "")
+                )
+                if quote is None:
+                    failed.append({"id": quote_id, "reason": "没有找到该语录"})
+                    continue
+                self.storage.delete_quote(quote.session, quote.id)
+                self.storage.delete_sent_message(quote.session, quote.id)
+                deleted.append(self._quote_payload(quote))
+            logger.info(
+                f"[archiver] webui batch deleted quotes: "
+                f"deleted={len(deleted)}, failed={len(failed)}"
+            )
+            return _ok({"deleted": deleted, "failed": failed})
+        except Exception as e:
+            logger.error(f"[archiver] webui batch delete quotes failed: {e}")
+            return _err(f"批量删除语录失败:{e}")
 
     # ---------- 导入 ----------
 

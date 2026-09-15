@@ -122,6 +122,7 @@
   .chat-text { margin: 4px 0 0 12px; white-space: pre-wrap; word-break: break-word; }
   .chat-images { margin-top: 8px; max-height: none; }
   .chat-img { width: 160px; min-height: 80px; }
+  th.check, td.check { width: 32px; text-align: center; }
 </style>
 </head>
 <body>
@@ -135,16 +136,18 @@
   <input id="keyword" type="search" placeholder="搜索文本 / 发送人 / 编号">
   <button id="btn-search" class="primary">搜索</button>
   <button id="btn-import">导入</button>
+  <button id="btn-batch-delete" disabled>删除选中</button>
   <button id="btn-refresh">刷新</button>
 </div>
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
+        <th class="check"><input type="checkbox" id="check-all"></th>
         <th>编号</th><th>发送人</th><th>内容</th><th>会话</th><th>收录时间</th><th>操作</th>
       </tr>
     </thead>
-    <tbody id="tbody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+    <tbody id="tbody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
   </table>
 </div>
 <div class="pagination">
@@ -202,7 +205,7 @@
     });
     return;
   }
-  var state = { page: 1, pageSize: 20, total: 0, keyword: "", session: "", rows: {} };
+  var state = { page: 1, pageSize: 20, total: 0, keyword: "", session: "", rows: {}, selected: {} };
   var $ = function (id) { return document.getElementById(id); };
 
   function showAlert(kind, text) {
@@ -252,13 +255,15 @@
   function renderRows(quotes) {
     var tbody = $("tbody");
     if (!quotes || !quotes.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无语录</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无语录</td></tr>';
+      updateBatchBtn();
       return;
     }
     state.rows = {};
     var html = "";
     quotes.forEach(function (q) {
       state.rows[q.id] = q;
+      var checked = state.selected[selectionKey(q.id, q.session)] ? " checked" : "";
       var tags = [];
       if (q.image_count > 0)
         tags.push('<button class="tag img-tag" data-preview="' + esc(q.id) + '">图片 ×' + q.image_count + "</button>");
@@ -268,6 +273,7 @@
         tags.push('<button class="tag img-tag" data-detail="' + esc(q.id) + '">聊天记录 ×' + q.forward_count + (imgs ? "（图 " + imgs + "）" : "") + "</button>");
       }
       html += "<tr>"
+        + '<td class="check"><input type="checkbox" class="row-check" data-id="' + esc(q.id) + '" data-session="' + esc(q.session) + '"' + checked + "></td>"
         + '<td class="code" title="' + esc(q.id) + '"><button class="img-tag" data-info="' + esc(q.id) + '">' + esc(q.code) + "</button></td>"
         + '<td class="sender" title="' + esc(q.sender_id) + '">' + esc(q.sender_name) + "</td>"
         + '<td class="content"><div class="text" title="' + esc(q.text) + '">' + esc(q.text || "") + "</div>"
@@ -278,6 +284,7 @@
         + "</tr>";
     });
     tbody.innerHTML = html;
+    updateBatchBtn();
   }
 
   function renderPager() {
@@ -324,12 +331,50 @@
     $("confirm-mask").classList.add("show");
   }
 
+  function askBatchDelete() {
+    var items = Object.keys(state.selected).map(function (k) {
+      return state.selected[k];
+    });
+    if (!items.length) return;
+    pendingDelete = { batch: true, items: items };
+    $("confirm-text").textContent =
+      "确定删除选中的 " + items.length + " 条语录吗？此操作不可恢复。";
+    $("confirm-mask").classList.add("show");
+  }
+
+  async function doBatchDelete(items) {
+    try {
+      var data = (await bridge.apiPost("api/quotes/batch_delete", { items: items })) || {};
+      var ok = (data.deleted || []).length;
+      var fail = (data.failed || []).length;
+      showAlert(
+        fail ? "error" : "success",
+        fail
+          ? "已删除 " + ok + " 条，" + fail + " 条失败（可能已被删除）。"
+          : "已删除 " + ok + " 条语录。"
+      );
+    } catch (e) {
+      showAlert("error", "批量删除失败：" + (e.message || e));
+    } finally {
+      state.selected = {};
+      $("check-all").checked = false;
+      updateBatchBtn();
+      await loadSessions();
+      await loadQuotes();
+    }
+  }
+
   async function doDelete() {
     if (!pendingDelete) return;
-    var id = pendingDelete.id;
-    var session = pendingDelete.session;
+    var pending = pendingDelete;
     pendingDelete = null;
     $("confirm-mask").classList.remove("show");
+    if (pending.batch) {
+      await doBatchDelete(pending.items);
+      return;
+    }
+    var id = pending.id;
+    var session = pending.session;
     try {
       await bridge.apiPost("api/quotes/delete", { id: id, session: session });
       showAlert("success", "已删除编号为 " + id.slice(0, 8) + " 的语录。");
@@ -343,6 +388,24 @@
   // 控制弹窗标题行显隐(详情弹窗不显示标题)
   function setTitleVisible(visible) {
     $("preview-title").style.display = visible ? "" : "none";
+  }
+
+  // 多选删除:选中项跨分页保持(key = session|id)
+  function selectionKey(id, session) {
+    return (session || "") + "|" + (id || "");
+  }
+
+  function updateBatchBtn() {
+    var n = Object.keys(state.selected).length;
+    var btn = $("btn-batch-delete");
+    btn.disabled = n === 0;
+    btn.textContent = n ? "删除选中（" + n + "）" : "删除选中";
+    var checks = Array.prototype.slice.call(
+      document.querySelectorAll(".row-check")
+    );
+    $("check-all").checked =
+      checks.length > 0 &&
+      checks.every(function (c) { return c.checked; });
   }
 
   // 编号点击:只显示元信息(不显示内容);数据直接取自列表,无需请求 API
@@ -622,6 +685,37 @@
       var btn = e.target.closest("button[data-del]");
       if (btn) askDelete(btn.dataset.del, btn.dataset.session);
     });
+    $("tbody").addEventListener("change", function (e) {
+      var check = e.target.closest("input.row-check");
+      if (!check) return;
+      var key = selectionKey(check.dataset.id, check.dataset.session);
+      if (check.checked) {
+        state.selected[key] = {
+          id: check.dataset.id,
+          session: check.dataset.session,
+        };
+      } else {
+        delete state.selected[key];
+      }
+      updateBatchBtn();
+    });
+    $("check-all").addEventListener("change", function () {
+      var checked = this.checked;
+      document.querySelectorAll(".row-check").forEach(function (c) {
+        c.checked = checked;
+        var key = selectionKey(c.dataset.id, c.dataset.session);
+        if (checked) {
+          state.selected[key] = {
+            id: c.dataset.id,
+            session: c.dataset.session,
+          };
+        } else {
+          delete state.selected[key];
+        }
+      });
+      updateBatchBtn();
+    });
+    $("btn-batch-delete").addEventListener("click", askBatchDelete);
     $("btn-confirm-cancel").addEventListener("click", function () {
       pendingDelete = null;
       $("confirm-mask").classList.remove("show");
