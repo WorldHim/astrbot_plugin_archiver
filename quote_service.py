@@ -238,6 +238,21 @@ class QuoteService:
                     node = self._parse_onebot_forward_node(raw)
                     if node is not None:
                         nodes.append(node)
+        if nodes:
+            with_time = sum(
+                1 for n in nodes if float(n.get("time") or 0) > 0
+            )
+            first_keys = []
+            for comp in reply.chain or []:
+                raw_nodes = getattr(comp, "nodes", None)
+                if raw_nodes:
+                    first_keys.append(f"component-node:{len(raw_nodes)}")
+                elif str(getattr(comp, "id", "") or "").strip():
+                    first_keys.append(f"forward-id:{getattr(comp, 'id')}")
+            logger.info(
+                f"[archiver] collected {len(nodes)} forward nodes, "
+                f"{with_time} with send time; sources={first_keys}"
+            )
         return nodes
 
     @staticmethod
@@ -746,6 +761,14 @@ class QuoteService:
         except Exception as e:
             logger.warning(f"[archiver] build forward payload failed: {e}")
             return False
+        # AstrBot Node.to_dict 不序列化 time:补充节点时间,
+        # 让 QQ 客户端显示子消息的真实发送时间(time 为 0 的节点保持默认)
+        messages = payload.get("messages")
+        if isinstance(messages, list) and len(messages) == len(nodes):
+            for node, msg in zip(nodes, messages):
+                time_val = int(getattr(node, "time", 0) or 0)
+                if time_val and isinstance(msg, dict) and isinstance(msg.get("data"), dict):
+                    msg["data"]["time"] = time_val
         message_id = await self.napcat.send_forward_msg(event, payload)
         if not message_id:
             return False
@@ -753,6 +776,30 @@ class QuoteService:
         return True
 
     # ---------- 回执输出 ----------
+
+    async def _replay_by_reference(self, event, quote) -> bool:
+        """以引用节点方式回放聊天记录语录(显示原消息的时间/头像/样式)。
+
+        被引用的合并转发消息与本语录同会话且有消息 ID 时,直接引用原消息
+        构造合并转发;QQ 端显示原消息的真实发送时间/头像/样式。跨会话、
+        无消息 ID 或发送失败时返回 False,调用方回退为内容快照节点
+        (子消息由 bot 重发,时间为发送时间——NapCat 合并转发机制限制:
+        multiForwardMsg 引用 bot 新发的子消息,节点自定义 time 被忽略)。
+        """
+        message_id = str(getattr(quote, "message_id", "") or "").strip()
+        if not message_id:
+            return False
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if not umo or str(quote.session or "") != umo:
+            return False
+        if self.napcat is None:
+            return False
+        payload = {"messages": [{"type": "node", "data": {"id": message_id}}]}
+        sent_id = await self.napcat.send_forward_msg(event, payload)
+        if not sent_id:
+            return False
+        self.record_sent(event, [sent_id], quote)
+        return True
 
     async def _emit_nodes(self, event, nodes, quote) -> tuple[str, object]:
         """QQ 平台直发合并转发并记录映射;失败回退框架发送。
@@ -824,7 +871,10 @@ class QuoteService:
             return "chain", chain
         # 以聊天记录(合并转发)形式发送,更直观优雅
         if quote.forward_nodes:
-            # 聊天记录语录:保持聊天记录形态,最后一条为收录信息
+            # 聊天记录语录:优先引用原消息(QQ 显示原时间/头像/样式),
+            # 失败回退为内容快照节点
+            if await self._replay_by_reference(event, quote):
+                return "sent", None
             nodes: list = self.build_forward_quote_nodes(quote)
         else:
             nodes = [self.quote_node(quote)]

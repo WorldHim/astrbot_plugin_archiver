@@ -925,3 +925,70 @@ class TestMetadata:
         version = re.search(r"^version:\s*v?([0-9.]+)", meta, re.M).group(1)
         assert archiver_main.PLUGIN_VERSION == version
         assert "astrbot_plugin_archiver" in meta
+
+
+class TestReplayReference:
+    """聊天记录语录回放:优先引用原消息(原时间/头像),失败回退内容快照。"""
+
+    def _chat_record_quote(self, message_id="orig-1"):
+        return make_quote(
+            umo=UMO_GROUP,
+            message_id=message_id,
+            text="[聊天记录]",
+            forward_nodes=[
+                {
+                    "sender_id": "20002",
+                    "sender_name": "张三",
+                    "text": "今天天气真好",
+                    "images": [],
+                }
+            ],
+        )
+
+    def test_reference_replay_success(self, plugin):
+        plugin._storage.add_quote(UMO_GROUP, self._chat_record_quote())
+        event = make_reply_event(
+            None,
+            bot_responses={
+                "send_group_forward_msg": {"data": {"message_id": "sent-1"}}
+            },
+        )
+        results = collect(plugin.laidiandian(event))
+        # 引用直发成功:无额外输出(消息映射已记录,回复删除可定位)
+        assert results == []
+        assert (
+            plugin._storage.find_quote_id_by_sent_message(UMO_GROUP, "sent-1")
+            is not None
+        )
+
+    def test_reference_replay_cross_session_fallback(self, tmp_path):
+        # fallback_global 从其他会话抽到聊天记录语录(原消息 bot 不可见)
+        # → 不引用,回退内容快照节点
+        plugin = _plugin_with_config(tmp_path, {"fallback_global": True})
+        plugin._storage.add_quote(UMO_GROUP, self._chat_record_quote())
+        event = make_reply_event(None, umo="aiocqhttp:GroupMessage:other")
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "张三"
+        assert "今天天气真好" in nodes_obj.nodes[0].content[0].text
+
+    def test_reference_replay_no_message_id_fallback(self, plugin):
+        # 无原消息 ID(平台未提供) → 回退内容快照节点
+        plugin._storage.add_quote(
+            UMO_GROUP, self._chat_record_quote(message_id="")
+        )
+        event = make_reply_event(None)
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
+
+    def test_reference_replay_send_failed_fallback(self, plugin):
+        # 引用发送失败(原消息失效等) → 回退内容快照节点
+        plugin._storage.add_quote(UMO_GROUP, self._chat_record_quote())
+        event = make_reply_event(
+            None, bot_responses={"send_group_forward_msg": None}
+        )
+        results = collect(plugin.laidiandian(event))
+        assert results[0][0] == "chain"
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "张三"
