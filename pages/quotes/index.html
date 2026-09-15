@@ -169,6 +169,17 @@
     </div>
   </div>
 </div>
+<div class="modal-mask" id="confirm-mask">
+  <div class="modal">
+    <h2>确认删除</h2>
+    <p class="hint" id="confirm-text"></p>
+    <div class="row">
+      <span class="spacer"></span>
+      <button id="btn-confirm-cancel">取消</button>
+      <button id="btn-confirm-delete" class="primary">删除</button>
+    </div>
+  </div>
+</div>
 <div class="modal-mask" id="preview-mask">
   <div class="modal">
     <div class="row">
@@ -302,10 +313,23 @@
     } catch (e) { /* 筛选下拉加载失败不阻塞列表 */ }
   }
 
-  async function deleteQuote(id, session) {
-    if (!window.confirm("确定删除编号为 " + id.slice(0, 8) + " 的语录吗？此操作不可恢复。")) {
-      return;
-    }
+  // iframe sandbox 未包含 allow-modals,window.confirm 会被浏览器静默阻止:
+  // 用页面内自定义确认弹窗替代
+  var pendingDelete = null;
+
+  function askDelete(id, session) {
+    pendingDelete = { id: id, session: session };
+    $("confirm-text").textContent =
+      "确定删除编号为 " + id.slice(0, 8) + " 的语录吗？此操作不可恢复。";
+    $("confirm-mask").classList.add("show");
+  }
+
+  async function doDelete() {
+    if (!pendingDelete) return;
+    var id = pendingDelete.id;
+    var session = pendingDelete.session;
+    pendingDelete = null;
+    $("confirm-mask").classList.remove("show");
     try {
       await bridge.apiPost("api/quotes/delete", { id: id, session: session });
       showAlert("success", "已删除编号为 " + id.slice(0, 8) + " 的语录。");
@@ -540,8 +564,19 @@
         return;
       }
       var btn = e.target.closest("button[data-del]");
-      if (btn) deleteQuote(btn.dataset.del, btn.dataset.session);
+      if (btn) askDelete(btn.dataset.del, btn.dataset.session);
     });
+    $("btn-confirm-cancel").addEventListener("click", function () {
+      pendingDelete = null;
+      $("confirm-mask").classList.remove("show");
+    });
+    $("confirm-mask").addEventListener("click", function (e) {
+      if (e.target === this) {
+        pendingDelete = null;
+        this.classList.remove("show");
+      }
+    });
+    $("btn-confirm-delete").addEventListener("click", doDelete);
     $("btn-preview-close").addEventListener("click", function () {
       $("preview-mask").classList.remove("show");
     });
