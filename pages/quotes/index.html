@@ -265,10 +265,10 @@
       if (q.forward_count > 0) {
         var imgs = 0;
         (q.forward_images || []).forEach(function (n) { imgs += n; });
-        tags.push('<button class="tag img-tag" data-chat="' + esc(q.id) + '">聊天记录 ×' + q.forward_count + (imgs ? "（图 " + imgs + "）" : "") + "</button>");
+        tags.push('<button class="tag img-tag" data-detail="' + esc(q.id) + '">聊天记录 ×' + q.forward_count + (imgs ? "（图 " + imgs + "）" : "") + "</button>");
       }
       html += "<tr>"
-        + '<td class="code" title="' + esc(q.id) + '">' + esc(q.code) + "</td>"
+        + '<td class="code" title="' + esc(q.id) + '"><button class="img-tag" data-detail="' + esc(q.id) + '">' + esc(q.code) + "</button></td>"
         + '<td class="sender" title="' + esc(q.sender_id) + '">' + esc(q.sender_name) + "</td>"
         + '<td class="content"><div class="text" title="' + esc(q.text) + '">' + esc(q.text || "") + "</div>"
         + (tags.length ? '<div class="meta">' + tags.join("") + "</div>" : "") + "</td>"
@@ -340,9 +340,9 @@
     }
   }
 
-  async function openChatRecord(item) {
+  async function openDetail(item) {
     $("preview-title").textContent =
-      "聊天记录 — " + (item.sender_name || item.code) + "（" + item.code + "）";
+      "语录详情 — " + (item.sender_name || item.code) + "（" + (item.id || item.code) + "）";
     var body = $("preview-body");
     body.innerHTML = '<p class="empty">加载中…</p>';
     $("preview-mask").classList.add("show");
@@ -355,53 +355,67 @@
         body.innerHTML = '<p class="empty">无法加载。</p>';
         return;
       }
-      renderChatRecord(body, data);
+      renderDetail(body, data);
     } catch (e) {
       body.innerHTML = '<p class="empty">加载失败：' + esc(e.message || e) + "</p>";
     }
   }
 
-  function renderChatRecord(body, data) {
-    var nodes = data.forward_nodes || [];
-    if (!nodes.length) {
-      body.innerHTML = '<p class="empty">该语录没有聊天记录内容。</p>';
-      return;
+  function appendImages(body, data, node, count) {
+    if (!count) return;
+    var imgs = document.createElement("div");
+    imgs.className = "preview-body chat-images";
+    for (var i = 0; i < count; i++) {
+      var imgBox = document.createElement("div");
+      imgBox.className = "preview-img chat-img";
+      imgBox.innerHTML = '<span class="empty">加载中…</span>';
+      imgs.appendChild(imgBox);
+      loadPreviewImage(imgBox, data.id, i, node);
     }
+    body.appendChild(imgs);
+  }
+
+  function renderDetail(body, data) {
     body.innerHTML = "";
-    nodes.forEach(function (node, nd) {
+    var meta = document.createElement("div");
+    meta.className = "chat-sender";
+    meta.textContent =
+      "编号：" + (data.id || data.code) +
+      "　·　收录人：" + (data.archived_by_name || "—") +
+      "　·　收录时间：" + fmtTime(data.archived_at_ts);
+    body.appendChild(meta);
+    if (data.text && data.text !== "[聊天记录]") {
+      var t = document.createElement("div");
+      t.className = "chat-text";
+      t.textContent = data.text;
+      body.appendChild(t);
+    }
+    appendImages(body, data, -1, data.image_count || 0);
+    (data.forward_nodes || []).forEach(function (node, nd) {
       var box = document.createElement("div");
       box.className = "chat-node";
       var sender = document.createElement("div");
       sender.className = "chat-sender";
       sender.textContent = node.sender_name || "未知用户";
       if (node.time) {
-        var t = document.createElement("span");
-        t.className = "chat-time";
-        t.textContent = fmtTime(node.time);
-        sender.appendChild(t);
+        var timeEl = document.createElement("span");
+        timeEl.className = "chat-time";
+        timeEl.textContent = fmtTime(node.time);
+        sender.appendChild(timeEl);
       }
       box.appendChild(sender);
       if (node.text) {
-        var text = document.createElement("div");
-        text.className = "chat-text";
-        text.textContent = node.text;
-        box.appendChild(text);
-      }
-      var n = node.image_count || 0;
-      if (n) {
-        var imgs = document.createElement("div");
-        imgs.className = "preview-body chat-images";
-        for (var i = 0; i < n; i++) {
-          var imgBox = document.createElement("div");
-          imgBox.className = "preview-img chat-img";
-          imgBox.innerHTML = '<span class="empty">加载中…</span>';
-          imgs.appendChild(imgBox);
-          loadPreviewImage(imgBox, data.id, i, nd);
-        }
-        box.appendChild(imgs);
+        var nodeText = document.createElement("div");
+        nodeText.className = "chat-text";
+        nodeText.textContent = node.text;
+        box.appendChild(nodeText);
       }
       body.appendChild(box);
+      appendImages(body, data, nd, node.image_count || 0);
     });
+    if (!body.children.length) {
+      body.innerHTML = '<p class="empty">该语录没有内容。</p>';
+    }
   }
 
   function openPreview(item) {
@@ -551,10 +565,10 @@
       doImport(text);
     });
     $("tbody").addEventListener("click", function (e) {
-      var chatBtn = e.target.closest("button[data-chat]");
-      if (chatBtn) {
-        var chatItem = state.rows[chatBtn.dataset.chat];
-        if (chatItem) openChatRecord(chatItem);
+      var detailBtn = e.target.closest("button[data-detail]");
+      if (detailBtn) {
+        var detailItem = state.rows[detailBtn.dataset.detail];
+        if (detailItem) openDetail(detailItem);
         return;
       }
       var previewBtn = e.target.closest("button[data-preview]");

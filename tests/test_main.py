@@ -992,3 +992,79 @@ class TestReplayReference:
         assert results[0][0] == "chain"
         nodes_obj = results[0][1][0]
         assert nodes_obj.nodes[0].name == "张三"
+
+
+class TestQuoteByCode:
+    """按编号(完整 ID 或前 8 位)查找语录:先本会话,后全库。"""
+
+    def test_by_code_full_id_same_session(self, plugin):
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="code-0001", text="编号语录")
+        )
+        event = make_reply_event(None, umo=UMO_GROUP)
+        found = plugin._service.quote_by_code(event, "code-0001")
+        assert found is not None
+        assert found.id == "code-0001"
+
+    def test_by_code_prefix_same_session(self, plugin):
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="code-0002", text="前缀")
+        )
+        event = make_reply_event(None, umo=UMO_GROUP)
+        found = plugin._service.quote_by_code(event, "code-0002")
+        assert found is not None
+        assert found.id == "code-0002"
+
+    def test_by_code_fallback_global(self, plugin):
+        # 本会话无该编号,全库回退(其他会话)可找到
+        plugin._storage.add_quote(
+            UMO_OTHER, make_quote(umo=UMO_OTHER, message_id="code-0003", text="其他会话")
+        )
+        event = make_reply_event(None, umo=UMO_GROUP)
+        found = plugin._service.quote_by_code(event, "code-0003")
+        assert found is not None
+        assert found.id == "code-0003"
+
+    def test_by_code_not_found(self, plugin):
+        event = make_reply_event(None, umo=UMO_GROUP)
+        assert plugin._service.quote_by_code(event, "no-such-1") is None
+
+    def test_by_code_empty(self, plugin):
+        event = make_reply_event(None, umo=UMO_GROUP)
+        assert plugin._service.quote_by_code(event, "") is None
+
+
+class TestLaidiandianByCode:
+    """/语录 <编号>:编号存在时回放该条,不存在时回退随机抽取。"""
+
+    def test_laidiandian_by_code_replays(self, plugin):
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="cmd-0001", text="编号语录内容")
+        )
+        event = make_reply_event(None, umo=UMO_GROUP)
+        results = collect(plugin.laidiandian(event, owner="cmd-0001"))
+        assert results[0][0] == "chain"
+        nodes_obj = results[0][1][0]
+        assert nodes_obj.nodes[0].name == "张三"
+        assert "编号语录内容" in nodes_obj.nodes[0].content[0].text
+
+    def test_laidiandian_by_unknown_code_prompts(self, plugin):
+        # 编号格式但不存在 → 明确提示,不回退昵称匹配误导
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="other-1", text="随机语录")
+        )
+        event = make_reply_event(None, umo=UMO_GROUP)
+        results = collect(plugin.laidiandian(event, owner="abc12345"))
+        assert results[0][0] == "plain"
+        assert "没有找到编号" in results[0][1]
+
+    def test_laidiandian_by_nickname_still_works(self, plugin):
+        # 非编号格式(昵称) → 按昵称抽取归属人的语录
+        plugin._storage.add_quote(
+            UMO_GROUP, make_quote(umo=UMO_GROUP, message_id="nick-1", text="昵称语录")
+        )
+        event = make_reply_event(None, umo=UMO_GROUP)
+        results = collect(plugin.laidiandian(event, owner="张三"))
+        assert results[0][0] == "chain"
+        nodes_obj = results[0][1][0]
+        assert "昵称语录" in nodes_obj.nodes[0].content[0].text

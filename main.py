@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 
@@ -154,7 +155,24 @@ class ArchiverPlugin(Star):
 
     @filter.command("语录", alias={"随机语录"})
     async def laidiandian(self, event: AstrMessageEvent, owner: str = ""):
-        """发送 /语录 从语录库中随机调用一条已收录的语录;可 @某人 或输入昵称抽取指定人的语录"""
+        """发送 /语录 从语录库中随机调用一条已收录的语录;可 @某人、输入昵称或语录编号(如 1fdf08f4)抽取"""
+        code = str(owner or "").strip()
+        if code:
+            # 编号优先:按语录编号(完整 ID 或前 8 位)查找,找到直接回放该条
+            quote = self._service.quote_by_code(event, code)
+            if quote is not None:
+                kind, payload = await self._service.emit_random(event, quote)
+                if kind == "sent":
+                    return
+                yield event.chain_result(payload)
+                return
+            if re.fullmatch(r"[0-9a-fA-F]{6,8}", code):
+                # 编号格式但不存在 → 明确提示,不回退昵称匹配误导
+                yield event.plain_result(
+                    f"没有找到编号为 {code} 的语录，可回复语录消息查看编号。"
+                )
+                return
+        quote, owner_id, owner_name = self._service.random_quote(event, owner)
         quote, owner_id, owner_name = self._service.random_quote(event, owner)
         if quote is None:
             if owner_id or owner_name:

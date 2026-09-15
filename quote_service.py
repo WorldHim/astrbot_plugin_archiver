@@ -711,6 +711,21 @@ class QuoteService:
 
     # ---------- 语录抽取 ----------
 
+    def quote_by_code(self, event: AstrMessageEvent, code: str):
+        """按语录编号(完整 ID 或前 8 位)查找语录:先本会话,后全库。
+
+        供 /语录 <编号> 与 WebUI 按编号查看使用;找不到返回 None。
+        """
+        code = str(code or "").strip()
+        if not code:
+            return None
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if umo:
+            quote = self.storage.get_quote_by_id(umo, code)
+            if quote is not None:
+                return quote
+        return self.storage.find_quote_by_id_prefix(code)
+
     def random_quote(self, event: AstrMessageEvent, owner: str = ""):
         """从语录库中随机抽取一条语录(可指定归属人)。
 
