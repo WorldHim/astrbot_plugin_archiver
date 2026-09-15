@@ -626,7 +626,7 @@ class TestShandian:
         q = make_quote()
         plugin._storage.add_quote(UMO_GROUP, q)
         plugin._storage.record_sent_message(UMO_GROUP, "sent-200", q.id)
-        event = FakeEvent(message=[make_reply(id="sent-200", chain=[])])
+        event = FakeEvent(message=[make_reply(id="sent-200", chain=[])], is_admin=True)
         results = collect(plugin.shandian(event))
         assert "已删除" in results[0][1]
         assert plugin._storage.session_count(UMO_GROUP) == 0
@@ -654,7 +654,8 @@ class TestShandian:
             f"已收录「张三」的发言，本会话语录库共 1 条（编号：{q.id[:8]}）"
         )
         del_event = FakeEvent(
-            message=[make_reply(id="text-1", chain=[Plain(receipt)], message_str=receipt)]
+            message=[make_reply(id="text-1", chain=[Plain(receipt)], message_str=receipt)],
+            is_admin=True,
         )
         results = collect(plugin.shandian(del_event))
         assert "已删除" in results[0][1]
@@ -671,7 +672,7 @@ class TestShandian:
         )
         collect(plugin.rudian(event))
         # 回复群友的原始消息(orig-1)删除,无需 bot 接口
-        del_event = FakeEvent(message=[make_reply(id="orig-1", chain=[])])
+        del_event = FakeEvent(message=[make_reply(id="orig-1", chain=[])], is_admin=True)
         results = collect(plugin.shandian(del_event))
         assert "已删除" in results[0][1]
         assert plugin._storage.session_count(UMO_GROUP) == 0
@@ -686,7 +687,7 @@ class TestShandian:
             },
         )
         collect(plugin.rudian(event))
-        del_event = FakeEvent(message=[make_reply(id="orig-999", chain=[])])
+        del_event = FakeEvent(message=[make_reply(id="orig-999", chain=[])], is_admin=True)
         results = collect(plugin.shandian(del_event))
         assert results[0][0] == "plain"
         assert "请回复" in results[0][1] or "编号" in results[0][1]
@@ -728,6 +729,7 @@ class TestShandian:
         # 回复 bot 发送的语录消息(Reply.id 为合并转发消息 ID)
         del_event = FakeEvent(
             message=[make_reply(id="sent-1", chain=[])],
+            is_admin=True,
             bot_responses={
                 "get_forward_msg": {
                     "data": {
@@ -756,24 +758,24 @@ class TestShandian:
         assert plugin._storage.session_count(UMO_GROUP) == 0
 
     def test_delete_by_code(self, plugin):
-        # /删典 <编号> → 直接删除
+        # /删除 <编号> → 直接删除
         q = make_quote()
         plugin._storage.add_quote(UMO_GROUP, q)
-        event = FakeEvent(message=[])
+        event = FakeEvent(message=[], is_admin=True)
         results = collect(plugin.shandian(event, q.id[:8]))
         assert "已删除" in results[0][1]
         assert plugin._storage.session_count(UMO_GROUP) == 0
 
     def test_delete_code_not_found(self, plugin):
         plugin._storage.add_quote(UMO_GROUP, make_quote())
-        event = FakeEvent(message=[])
+        event = FakeEvent(message=[], is_admin=True)
         results = collect(plugin.shandian(event, "ffffffff"))
         assert "没有找到" in results[0][1]
         assert plugin._storage.session_count(UMO_GROUP) == 1
 
     def test_delete_no_target(self, plugin):
         # 既未回复语录消息也无编号 → 使用提示
-        event = FakeEvent(message=[])
+        event = FakeEvent(message=[], is_admin=True)
         results = collect(plugin.shandian(event))
         assert "请回复" in results[0][1] or "编号" in results[0][1]
 
@@ -781,6 +783,7 @@ class TestShandian:
         # 回复的消息拉不到编号(非语录消息) → 提示
         event = make_reply_event(
             make_reply(id="sent-2", chain=[]),
+            is_admin=True,
             bot_responses={
                 "get_forward_msg": {
                     "data": {
@@ -799,6 +802,55 @@ class TestShandian:
         results = collect(plugin.shandian(event))
         assert results[0][0] == "plain"
         assert "请回复" in results[0][1] or "编号" in results[0][1]
+
+
+class TestPermission:
+    def test_upload_permission_denied(self, tmp_path):
+        # upload_permission=Bot管理员 → 非 Bot 管理员拒绝上传
+        plugin = _plugin_with_config(tmp_path, {"upload_permission": "Bot管理员"})
+        event = make_reply_event(make_reply())
+        results = collect(plugin.rudian(event))
+        assert "权限" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
+    def test_upload_permission_admin_allowed(self, tmp_path):
+        # upload_permission=Bot管理员 → Bot 管理员允许上传
+        plugin = _plugin_with_config(tmp_path, {"upload_permission": "Bot管理员"})
+        event = make_reply_event(make_reply(), is_admin=True)
+        results = collect(plugin.rudian(event))
+        assert plugin._storage.session_count(UMO_GROUP) == 1
+
+    def test_delete_permission_denied(self, tmp_path):
+        # delete_permission=Bot管理员 → 非 Bot 管理员拒绝删除
+        plugin = _plugin_with_config(tmp_path, {"delete_permission": "Bot管理员"})
+        q = make_quote()
+        plugin._storage.add_quote(UMO_GROUP, q)
+        event = FakeEvent(message=[make_reply(id=q.message_id, chain=[])])
+        results = collect(plugin.shandian(event))
+        assert "权限" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 1
+
+    def test_delete_permission_admin_allowed(self, tmp_path):
+        # delete_permission=Bot管理员 → Bot 管理员允许删除
+        plugin = _plugin_with_config(tmp_path, {"delete_permission": "Bot管理员"})
+        q = make_quote()
+        plugin._storage.add_quote(UMO_GROUP, q)
+        event = FakeEvent(
+            message=[make_reply(id=q.message_id, chain=[])], is_admin=True
+        )
+        results = collect(plugin.shandian(event))
+        assert "已删除" in results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 0
+
+    def test_default_permission(self, plugin):
+        # 默认:上传=群员(所有人可上传),删除=管理员(非管理员拒绝删除)
+        event = make_reply_event(make_reply())
+        results = collect(plugin.rudian(event))
+        assert plugin._storage.session_count(UMO_GROUP) == 1
+        del_event = FakeEvent(message=[make_reply(id="msg-001", chain=[])])
+        del_results = collect(plugin.shandian(del_event))
+        assert "权限" in del_results[0][1]
+        assert plugin._storage.session_count(UMO_GROUP) == 1
 
 
 class TestConfig:

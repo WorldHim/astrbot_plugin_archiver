@@ -302,12 +302,15 @@ class FakeEvent:
         forward_text=None,
         bot_responses=None,
         self_id="",
+        is_admin=False,
+        group_id="",
     ):
         self._uid = uid
         self._self_id = self_id
+        self._is_admin = is_admin
         self.message_str = "保存"
         self.message_obj = types.SimpleNamespace(
-            message=list(message or []), self_id=self_id
+            message=list(message or []), self_id=self_id, group_id=group_id
         )
         self.unified_msg_origin = unified_msg_origin or UMO_GROUP
         self._platform_name = platform_name
@@ -318,6 +321,12 @@ class FakeEvent:
 
     def get_self_id(self):
         return self._self_id
+
+    def is_admin(self):
+        return self._is_admin
+
+    def get_group_id(self):
+        return self.message_obj.group_id
 
     def get_messages(self):
         return self.message_obj.message
@@ -361,6 +370,8 @@ def make_reply_event(
     platform_name="aiocqhttp",
     forward_text=None,
     bot_responses=None,
+    is_admin=False,
+    group_id="",
 ) -> FakeEvent:
     """构造一条(可含引用的)回复消息事件。
 
@@ -374,6 +385,8 @@ def make_reply_event(
         platform_name=platform_name,
         forward_text=forward_text,
         bot_responses=bot_responses,
+        is_admin=is_admin,
+        group_id=group_id,
     )
 
 

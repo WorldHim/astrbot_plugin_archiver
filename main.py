@@ -529,6 +529,11 @@ class ArchiverPlugin(Star):
     @filter.command("保存", alias={"入典", "收录", "存档", "保存语录"})
     async def rudian(self, event: AstrMessageEvent):
         """回复一条消息并发送 /保存，将该消息的发送人与内容存档"""
+        if not await self._check_permission(
+            event, self._cfg("upload_permission", "群员")
+        ):
+            yield event.plain_result("你没有上传语录的权限。")
+            return
         reply = self._find_reply(event)
         if reply is None:
             yield event.plain_result(
@@ -712,6 +717,53 @@ class ArchiverPlugin(Star):
                 chain.append(comp)
         yield event.chain_result(chain)
 
+    async def _check_permission(
+        self, event: AstrMessageEvent, level: str
+    ) -> bool:
+        """校验用户是否满足权限级别。
+
+        级别(不区分大小写,兼容常见别名): 群员(member/普通成员)=所有人;
+        管理员(admin)=群管理员+群主+Bot管理员;群主(owner)=群主+Bot管理员;
+        Bot管理员=仅Bot管理员(event.is_admin())。私聊消息无法查询群信息,
+        按 Bot 管理员判定;未知级别保守地按 Bot 管理员判定。
+        """
+        level = str(level or "").strip().replace(" ", "")
+        lowered = level.lower()
+        if level in {"群员", "普通成员"} or lowered == "member":
+            return True
+        try:
+            is_bot_admin = bool(event.is_admin())
+        except Exception:
+            is_bot_admin = False
+        if lowered in {"bot管理员", "botadmin", "bot_admin"}:
+            return is_bot_admin
+        group_id = ""
+        try:
+            group_id = str(event.get_group_id() or "").strip()
+        except Exception:
+            group_id = ""
+        if not group_id:
+            return is_bot_admin
+        is_group_owner = False
+        is_group_admin = False
+        try:
+            group = await event.get_group()
+        except Exception as e:
+            logger.info(f"[archiver] Failed to query group info: {e}")
+            group = None
+        if group is not None:
+            sender_id = str(event.get_sender_id() or "").strip()
+            owner_id = str(getattr(group, "group_owner", "") or "").strip()
+            admin_ids = [
+                str(i).strip()
+                for i in (getattr(group, "group_admins", None) or [])
+            ]
+            is_group_owner = bool(owner_id and sender_id == owner_id)
+            is_group_admin = sender_id in admin_ids
+        if level in {"群主"} or lowered == "owner":
+            return is_group_owner or is_bot_admin
+        return is_group_admin or is_group_owner or is_bot_admin
+
     async def _send_forward_nodes(
         self, event: AstrMessageEvent, nodes: list
     ) -> list[str] | None:
@@ -873,6 +925,11 @@ class ArchiverPlugin(Star):
     @filter.command("删除", alias={"删除语录"})
     async def shandian(self, event: AstrMessageEvent, code: str = ""):
         """回复语录消息或被收录的原消息发送 /删除 删除;也可 /删除 <编号>"""
+        if not await self._check_permission(
+            event, self._cfg("delete_permission", "管理员")
+        ):
+            yield event.plain_result("你没有删除语录的权限。")
+            return
         reply = self._find_reply(event)
         code = str(code or "").strip()
         reply_id = (
