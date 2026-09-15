@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import uuid
 
 from astrbot.api import logger
@@ -30,6 +31,9 @@ def register_web_apis(storage: QuoteStorage, context) -> None:
         f"{prefix}/sessions", api.list_sessions, ["GET"], "查询会话统计"
     )
     context.register_web_api(
+        f"{prefix}/image", api.get_image, ["GET"], "获取语录图片(base64 或远程 URL)"
+    )
+    context.register_web_api(
         f"{prefix}/quotes/delete", api.delete_quote, ["POST"], "删除指定语录"
     )
     context.register_web_api(
@@ -43,6 +47,21 @@ def _ok(data) -> dict:
 
 def _err(message: str) -> dict:
     return {"status": "error", "message": message}
+
+
+# 图片文件后缀 → MIME 类型
+_IMAGE_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
+
+
+def _image_mime(suffix: str) -> str:
+    return _IMAGE_MIME.get(suffix.lower(), "application/octet-stream")
 
 
 class QuoteWebApi:
@@ -86,6 +105,53 @@ class QuoteWebApi:
         except Exception as e:
             logger.error(f"[archiver] webui list sessions failed: {e}")
             return _err(f"查询会话失败:{e}")
+
+    async def get_image(self, **_kwargs) -> dict:
+        """GET {prefix}/image?quote_id=&index=&node= 获取语录图片。
+
+        node 为 -1 表示主消息图片,node >= 0 表示聊天记录第 node 条子消息
+        的图片。优先返回本地存档(base64,经 <img data:URL> 直接展示,规避
+        <img src> 无法携带 dashboard 认证头的问题);无本地存档时返回远程
+        URL 由前端回退展示。
+        """
+        try:
+            query = request.query
+            quote_id = str(query.get("quote_id", "") or "").strip()
+            if not quote_id:
+                return _err("缺少语录编号(quote_id)")
+            session = str(query.get("session", "") or "").strip()
+            try:
+                index = int(query.get("index", 0))
+                node = int(query.get("node", -1))
+            except (TypeError, ValueError):
+                return _err("图片序号格式错误")
+            quote = self._locate_quote(quote_id, session)
+            if quote is None:
+                return _err("没有找到该语录,请刷新后重试")
+            images = self._images_of(quote, node)
+            if images is None:
+                return _err("聊天记录子消息不存在")
+            if index < 0 or index >= len(images):
+                return _err("图片序号超出范围")
+            item = images[index]
+            rel = str(item.get("path") or "").strip()
+            if rel:
+                local = self.storage.resolve_image_path(rel)
+                if local is not None:
+                    data = local.read_bytes()
+                    return _ok(
+                        {
+                            "mime": _image_mime(local.suffix),
+                            "b64": base64.b64encode(data).decode("ascii"),
+                        }
+                    )
+            url = str(item.get("url") or item.get("file") or "").strip()
+            if url:
+                return _ok({"mime": "", "url": url})
+            return _err("图片文件不存在")
+        except Exception as e:
+            logger.error(f"[archiver] webui get image failed: {e}")
+            return _err(f"获取图片失败:{e}")
 
     # ---------- 删除 ----------
 
@@ -188,6 +254,15 @@ class QuoteWebApi:
         return quotes
 
     @staticmethod
+    def _images_of(quote: Quote, node: int) -> list[dict[str, str]] | None:
+        """按 node 取图片列表:-1 为主消息;>=0 为聊天记录子消息;越界返回 None。"""
+        if node < 0:
+            return quote.images
+        if node < len(quote.forward_nodes):
+            return quote.forward_nodes[node].get("images") or []
+        return None
+
+    @staticmethod
     def _quote_payload(quote: Quote) -> dict:
         """序列化语录为 WebUI 列表项。"""
         return {
@@ -200,6 +275,9 @@ class QuoteWebApi:
             "text": quote.text,
             "image_count": len(quote.images),
             "forward_count": len(quote.forward_nodes),
+            "forward_images": [
+                len(node.get("images") or []) for node in quote.forward_nodes
+            ],
             "archived_by_name": quote.archived_by_name,
             "archived_at_ts": quote.archived_at_ts,
         }

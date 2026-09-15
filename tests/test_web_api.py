@@ -4,7 +4,7 @@ import sys
 
 from astrbot_plugin_archiver import web_api
 
-from conftest import UMO_GROUP, UMO_OTHER, make_quote
+from conftest import UMO_GROUP, UMO_OTHER, make_quote, write_png_bytes
 
 
 def asyncio_run(coro):
@@ -283,4 +283,87 @@ class TestImport:
         monkeypatch.setattr(web_api, "request", req)
         api = web_api.QuoteWebApi(plugin._storage)
         res = asyncio_run(api.import_quotes())
+        assert res["status"] == "error"
+
+
+class TestImage:
+    def _write_image(self, plugin, name="test.png"):
+        plugin._storage._images_dir.mkdir(parents=True, exist_ok=True)
+        path = plugin._storage._images_dir / name
+        path.write_bytes(write_png_bytes())
+        return f"images/{name}"
+
+    def test_image_local_base64(self, plugin, monkeypatch):
+        rel = self._write_image(plugin, "test.png")
+        plugin._storage.add_quote(
+            UMO_GROUP,
+            make_quote(message_id="img-0001", images=[{"path": rel}]),
+        )
+        _patch_request(
+            monkeypatch, query={"quote_id": "img-0001", "index": 0, "node": -1}
+        )
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_image())
+        assert res["status"] == "ok"
+        assert res["data"]["mime"] == "image/png"
+        assert res["data"]["b64"]
+
+    def test_image_url_fallback(self, plugin, monkeypatch):
+        plugin._storage.add_quote(
+            UMO_GROUP,
+            make_quote(
+                message_id="img-0002", images=[{"url": "https://example.com/a.jpg"}]
+            ),
+        )
+        _patch_request(monkeypatch, query={"quote_id": "img-0002", "index": 0})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_image())
+        assert res["status"] == "ok"
+        assert res["data"]["url"] == "https://example.com/a.jpg"
+
+    def test_image_forward_node(self, plugin, monkeypatch):
+        rel = self._write_image(plugin, "node.png")
+        q = make_quote(
+            message_id="img-0003",
+            text="[聊天记录]",
+            forward_nodes=[
+                {
+                    "sender_id": "10001",
+                    "sender_name": "A",
+                    "text": "子消息",
+                    "images": [{"path": rel}],
+                }
+            ],
+        )
+        plugin._storage.add_quote(UMO_GROUP, q)
+        _patch_request(
+            monkeypatch, query={"quote_id": "img-0003", "index": 0, "node": 0}
+        )
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_image())
+        assert res["status"] == "ok"
+        assert res["data"]["b64"]
+
+    def test_image_quote_not_found(self, plugin, monkeypatch):
+        _patch_request(monkeypatch, query={"quote_id": "no-such"})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_image())
+        assert res["status"] == "error"
+
+    def test_image_index_out_of_range(self, plugin, monkeypatch):
+        plugin._storage.add_quote(
+            UMO_GROUP,
+            make_quote(
+                message_id="img-0004", images=[{"url": "https://example.com/a.jpg"}]
+            ),
+        )
+        _patch_request(monkeypatch, query={"quote_id": "img-0004", "index": 5})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_image())
+        assert res["status"] == "error"
+
+    def test_image_missing_id(self, plugin, monkeypatch):
+        _patch_request(monkeypatch, query={})
+        api = web_api.QuoteWebApi(plugin._storage)
+        res = asyncio_run(api.get_image())
         assert res["status"] == "error"

@@ -101,6 +101,20 @@
   .modal textarea:focus { border-color: var(--primary); }
   .modal .row { display: flex; gap: 8px; align-items: center; }
   .modal .row .spacer { flex: 1; }
+  .preview-body { display: flex; flex-wrap: wrap; gap: 12px; max-height: 65vh; overflow: auto; }
+  .preview-cell { width: 200px; }
+  .preview-label { font-size: 12px; color: var(--text-secondary, #888); margin-bottom: 4px; }
+  .preview-img {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 90px; border-radius: 8px; overflow: hidden;
+    background: var(--bg-secondary, #f5f5f5); border: 1px solid var(--border, #e0e0e0);
+  }
+  .preview-img img { max-width: 100%; max-height: 240px; display: block; }
+  .img-tag {
+    border: none; background: none; padding: 0; cursor: pointer;
+    color: var(--primary, #4a7cf7); font: inherit;
+  }
+  .img-tag:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -148,6 +162,16 @@
     </div>
   </div>
 </div>
+<div class="modal-mask" id="preview-mask">
+  <div class="modal">
+    <div class="row">
+      <h2 id="preview-title">图片预览</h2>
+      <span class="spacer"></span>
+      <button id="btn-preview-close">关闭</button>
+    </div>
+    <div class="preview-body" id="preview-body"></div>
+  </div>
+</div>
 <script>
 (function () {
   "use strict";
@@ -160,7 +184,7 @@
     });
     return;
   }
-  var state = { page: 1, pageSize: 20, total: 0, keyword: "", session: "" };
+  var state = { page: 1, pageSize: 20, total: 0, keyword: "", session: "", rows: {} };
   var $ = function (id) { return document.getElementById(id); };
 
   function showAlert(kind, text) {
@@ -213,11 +237,18 @@
       tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无语录</td></tr>';
       return;
     }
+    state.rows = {};
     var html = "";
     quotes.forEach(function (q) {
+      state.rows[q.id] = q;
       var tags = [];
-      if (q.image_count > 0) tags.push('<span class="tag">图片 ×' + q.image_count + "</span>");
-      if (q.forward_count > 0) tags.push('<span class="tag">聊天记录 ×' + q.forward_count + "</span>");
+      if (q.image_count > 0)
+        tags.push('<button class="tag img-tag" data-preview="' + esc(q.id) + '">图片 ×' + q.image_count + "</button>");
+      if (q.forward_count > 0) {
+        var imgs = 0;
+        (q.forward_images || []).forEach(function (n) { imgs += n; });
+        tags.push('<button class="tag img-tag" data-preview="' + esc(q.id) + '">聊天记录 ×' + q.forward_count + (imgs ? "（图 " + imgs + "）" : "") + "</button>");
+      }
       html += "<tr>"
         + '<td class="code" title="' + esc(q.id) + '">' + esc(q.code) + "</td>"
         + '<td class="sender" title="' + esc(q.sender_id) + '">' + esc(q.sender_name) + "</td>"
@@ -275,6 +306,75 @@
       await loadQuotes();
     } catch (e) {
       showAlert("error", "删除失败：" + (e.message || e));
+    }
+  }
+
+  function openPreview(item) {
+    $("preview-title").textContent =
+      "图片预览 — " + (item.sender_name || item.code) + "（" + item.code + "）";
+    var body = $("preview-body");
+    body.innerHTML = '<p class="empty">加载中…</p>';
+    $("preview-mask").classList.add("show");
+    renderPreview(body, item);
+  }
+
+  function renderPreview(body, item) {
+    var parts = [];
+    var n = item.image_count || 0;
+    for (var i = 0; i < n; i++) {
+      parts.push({ index: i, node: -1, label: n > 1 ? "图片 " + (i + 1) : "图片" });
+    }
+    var fi = item.forward_images || [];
+    for (var nd = 0; nd < fi.length; nd++) {
+      for (var j = 0; j < fi[nd]; j++) {
+        parts.push({
+          index: j,
+          node: nd,
+          label: "聊天记录 " + (nd + 1) + (fi[nd] > 1 ? " 图 " + (j + 1) : ""),
+        });
+      }
+    }
+    if (!parts.length) {
+      body.innerHTML = '<p class="empty">该语录没有图片。</p>';
+      return;
+    }
+    body.innerHTML = "";
+    parts.forEach(function (p) {
+      var cell = document.createElement("div");
+      cell.className = "preview-cell";
+      var label = document.createElement("div");
+      label.className = "preview-label";
+      label.textContent = p.label;
+      var imgBox = document.createElement("div");
+      imgBox.className = "preview-img";
+      imgBox.innerHTML = '<span class="empty">加载中…</span>';
+      cell.appendChild(label);
+      cell.appendChild(imgBox);
+      body.appendChild(cell);
+      loadPreviewImage(imgBox, item.id, p.index, p.node);
+    });
+  }
+
+  async function loadPreviewImage(container, quoteId, index, node) {
+    try {
+      // 优先本地存档(base64 data URL,规避 <img src> 无法携带认证头);
+      // 无本地存档时 API 返回远程 URL 回退展示
+      var data = await bridge.apiGet("api/image", {
+        quote_id: quoteId,
+        index: index,
+        node: node,
+      });
+      if (data && data.b64) {
+        container.innerHTML =
+          '<img src="data:' + (data.mime || "image/png") + ';base64,' + data.b64 + '" alt="语录图片">';
+      } else if (data && data.url) {
+        container.innerHTML =
+          '<img src="' + esc(data.url) + '" alt="语录图片" referrerpolicy="no-referrer">';
+      } else {
+        container.innerHTML = '<span class="empty">无法加载</span>';
+      }
+    } catch (e) {
+      container.innerHTML = '<span class="empty">加载失败</span>';
     }
   }
 
@@ -356,8 +456,20 @@
       doImport(text);
     });
     $("tbody").addEventListener("click", function (e) {
+      var previewBtn = e.target.closest("button[data-preview]");
+      if (previewBtn) {
+        var item = state.rows[previewBtn.dataset.preview];
+        if (item) openPreview(item);
+        return;
+      }
       var btn = e.target.closest("button[data-del]");
       if (btn) deleteQuote(btn.dataset.del, btn.dataset.session);
+    });
+    $("btn-preview-close").addEventListener("click", function () {
+      $("preview-mask").classList.remove("show");
+    });
+    $("preview-mask").addEventListener("click", function (e) {
+      if (e.target === this) this.classList.remove("show");
     });
   }
 
