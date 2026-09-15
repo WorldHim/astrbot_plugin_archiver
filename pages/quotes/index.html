@@ -268,7 +268,7 @@
         tags.push('<button class="tag img-tag" data-detail="' + esc(q.id) + '">聊天记录 ×' + q.forward_count + (imgs ? "（图 " + imgs + "）" : "") + "</button>");
       }
       html += "<tr>"
-        + '<td class="code" title="' + esc(q.id) + '"><button class="img-tag" data-detail="' + esc(q.id) + '">' + esc(q.code) + "</button></td>"
+        + '<td class="code" title="' + esc(q.id) + '"><button class="img-tag" data-info="' + esc(q.id) + '">' + esc(q.code) + "</button></td>"
         + '<td class="sender" title="' + esc(q.sender_id) + '">' + esc(q.sender_name) + "</td>"
         + '<td class="content"><div class="text" title="' + esc(q.text) + '">' + esc(q.text || "") + "</div>"
         + (tags.length ? '<div class="meta">' + tags.join("") + "</div>" : "") + "</td>"
@@ -340,9 +340,42 @@
     }
   }
 
+  // 控制弹窗标题行显隐(详情弹窗不显示标题)
+  function setTitleVisible(visible) {
+    $("preview-title").style.display = visible ? "" : "none";
+  }
+
+  // 编号点击:只显示元信息(不显示内容);数据直接取自列表,无需请求 API
+  function openInfo(item) {
+    setTitleVisible(true);
+    $("preview-title").textContent = "语录信息";
+    var body = $("preview-body");
+    body.innerHTML = "";
+    $("preview-mask").classList.add("show");
+    var rows = [
+      ["编号", item.id || item.code],
+      ["发送人", (item.sender_name || "未知用户") + "（" + (item.sender_id || "—") + "）"],
+      ["收录人", item.archived_by_name || "—"],
+      ["收录时间", fmtTime(item.archived_at_ts)],
+    ];
+    rows.forEach(function (row) {
+      var box = document.createElement("div");
+      box.className = "chat-node";
+      var label = document.createElement("div");
+      label.className = "chat-sender";
+      label.textContent = row[0];
+      var value = document.createElement("div");
+      value.className = "chat-text";
+      value.textContent = row[1];
+      box.appendChild(label);
+      box.appendChild(value);
+      body.appendChild(box);
+    });
+  }
+
   async function openDetail(item) {
-    $("preview-title").textContent =
-      "语录详情 — " + (item.sender_name || item.code) + "（" + (item.id || item.code) + "）";
+    setTitleVisible(true);
+    $("preview-title").textContent = "聊天记录预览";
     var body = $("preview-body");
     body.innerHTML = '<p class="empty">加载中…</p>';
     $("preview-mask").classList.add("show");
@@ -377,13 +410,6 @@
 
   function renderDetail(body, data) {
     body.innerHTML = "";
-    var meta = document.createElement("div");
-    meta.className = "chat-sender";
-    meta.textContent =
-      "编号：" + (data.id || data.code) +
-      "　·　收录人：" + (data.archived_by_name || "—") +
-      "　·　收录时间：" + fmtTime(data.archived_at_ts);
-    body.appendChild(meta);
     // 主消息:与聊天记录子消息同样形态(发送人 + 内容);
     // 纯聊天记录(无外层文本)时不显示主消息节点
     var mainText = (data.text || "").replace("[聊天记录]", "").trim();
@@ -429,8 +455,8 @@
   }
 
   function openPreview(item) {
-    $("preview-title").textContent =
-      "图片预览 — " + (item.sender_name || item.code) + "（" + item.code + "）";
+    setTitleVisible(true);
+    $("preview-title").textContent = "图片预览";
     var body = $("preview-body");
     body.innerHTML = '<p class="empty">加载中…</p>';
     $("preview-mask").classList.add("show");
@@ -579,6 +605,12 @@
       if (detailBtn) {
         var detailItem = state.rows[detailBtn.dataset.detail];
         if (detailItem) openDetail(detailItem);
+        return;
+      }
+      var infoBtn = e.target.closest("button[data-info]");
+      if (infoBtn) {
+        var infoItem = state.rows[infoBtn.dataset.info];
+        if (infoItem) openInfo(infoItem);
         return;
       }
       var previewBtn = e.target.closest("button[data-preview]");
