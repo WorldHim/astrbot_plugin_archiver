@@ -36,6 +36,12 @@
     "type": "bool",
     "default": false
   },
+  "poke_trigger": {
+    "description": "戳一戳触发随机语录",
+    "hint": "开启后，在 QQ 群聊/私聊中「戳一戳」Bot 即可随机调用一条语录（无需发送指令）；仅 aiocqhttp(QQ) 等会下发戳一戳事件的平台有效",
+    "type": "bool",
+    "default": true
+  },
   "image_compress_threshold_mb": {
     "description": "收录图片超过该大小时自动压缩(MB)",
     "hint": "逐步重新编码并等比缩小直到达标;0 表示不压缩,始终保存原图",

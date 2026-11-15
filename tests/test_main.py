@@ -1080,3 +1080,79 @@ class TestLaidiandianByCode:
         assert results[0][0] == "chain"
         nodes_obj = results[0][1][0]
         assert "昵称语录" in nodes_obj.nodes[0].content[0].text
+
+
+class TestPoke:
+    """戳一戳(poke)触发随机语录:过滤器识别目标 + 监听器回放。"""
+
+    SELF_ID = "30003"
+
+    def _poke_event(self, target=None, self_id=SELF_ID, umo=UMO_GROUP, **kwargs):
+        Poke = sys.modules["astrbot.api.message_components"].Poke
+        poke = Poke(id=self_id if target is None else target)
+        return FakeEvent(
+            unified_msg_origin=umo,
+            message=[poke],
+            self_id=self_id,
+            **kwargs,
+        )
+
+    def test_poke_triggers_random_quote(self, plugin):
+        plugin._storage.add_quote(UMO_GROUP, make_quote())
+        event = self._poke_event()
+        results = collect(plugin.chuo_yi_chuo(event))
+        assert results[0][0] == "chain"
+        nodes_obj = results[0][1][0]
+        assert "哈哈哈哈" in nodes_obj.nodes[0].content[0].text
+        # 必须抑制默认 LLM 请求(私聊戳一戳会被判定为唤醒)
+        assert event.call_llm is True
+
+    def test_poke_empty_library_prompts(self, plugin):
+        event = self._poke_event()
+        results = collect(plugin.chuo_yi_chuo(event))
+        assert results[0][0] == "plain"
+        assert "语录库还是空的" in results[0][1]
+
+    def test_poke_disabled_by_config(self, tmp_path):
+        plugin = _plugin_with_config(tmp_path, {"poke_trigger": False})
+        plugin._storage.add_quote(UMO_GROUP, make_quote())
+        event = self._poke_event()
+        assert collect(plugin.chuo_yi_chuo(event)) == []
+
+    def test_poke_without_target_still_triggers(self, plugin):
+        # 部分平台不下发 target_id,不能因此漏掉戳一戳
+        plugin._storage.add_quote(UMO_GROUP, make_quote())
+        event = self._poke_event(target="")
+        results = collect(plugin.chuo_yi_chuo(event))
+        assert results[0][0] == "chain"
+
+    def test_filter_accepts_poke_to_bot(self, plugin):
+        filter_obj = archiver_main.PokeTriggerFilter()
+        assert filter_obj.filter(self._poke_event(), {}) is True
+
+    def test_filter_rejects_poke_to_other_user(self, plugin):
+        filter_obj = archiver_main.PokeTriggerFilter()
+        assert filter_obj.filter(self._poke_event(target="99999"), {}) is False
+
+    def test_filter_rejects_plain_message(self, plugin):
+        # 普通消息(无 Poke 组件)不触发
+        filter_obj = archiver_main.PokeTriggerFilter()
+        event = FakeEvent(message=[Plain("你好")], self_id=self.SELF_ID)
+        assert filter_obj.filter(event, {}) is False
+
+    def test_poke_disabled_still_suppresses_llm(self, tmp_path):
+        # 关闭功能后仍然要抑制默认 LLM:戳一戳不是对话内容
+        plugin = _plugin_with_config(tmp_path, {"poke_trigger": False})
+        event = self._poke_event()
+        assert collect(plugin.chuo_yi_chuo(event)) == []
+        assert event.call_llm is True
+
+    def test_filter_rejects_poke_among_other_components(self, plugin):
+        # 消息链里混有其他组件时仍按 poke 目标判断
+        Poke = sys.modules["astrbot.api.message_components"].Poke
+        filter_obj = archiver_main.PokeTriggerFilter()
+        event = FakeEvent(
+            message=[Plain("在吗"), Poke(id="99999")],
+            self_id=self.SELF_ID,
+        )
+        assert filter_obj.filter(event, {}) is False

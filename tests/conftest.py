@@ -29,8 +29,29 @@ def _install_astrbot_stubs():
         pass
 
     fake_event_mod.AstrMessageEvent = _AstrMessageEvent
+
+    class _CustomFilter:
+        """对齐 astrbot.core.star.filter.custom_filter.CustomFilter。"""
+
+        def __init__(self, raise_error: bool = True, **kwargs):
+            self.raise_error = raise_error
+
+        def filter(self, event, cfg) -> bool:  # pragma: no cover - 由子类实现
+            raise NotImplementedError
+
+    def _custom_filter(custom_type_filter=None, *args, **kwargs):
+        """对齐 astrbot 的 filter.custom_filter:接受 CustomFilter 子类并原样放行。"""
+
+        def decorator(awaitable):
+            awaitable.custom_filter_type = custom_type_filter
+            return awaitable
+
+        return decorator
+
     fake_event_mod.filter = types.SimpleNamespace(
-        command=lambda *a, **k: (lambda f: f)
+        command=lambda *a, **k: (lambda f: f),
+        custom_filter=_custom_filter,
+        CustomFilter=_CustomFilter,
     )
 
     fake_components = types.ModuleType("astrbot.api.message_components")
@@ -49,6 +70,7 @@ def _install_astrbot_stubs():
         Nodes = "Nodes"
         Reply = "Reply"
         Forward = "Forward"
+        Poke = "Poke"
 
     class _Plain:
         type = _ComponentType.Plain
@@ -140,6 +162,22 @@ def _install_astrbot_stubs():
         def __init__(self, id=""):
             self.id = id
 
+    class _Poke:
+        """对齐 astrbot.core.message.components.Poke。"""
+
+        type = _ComponentType.Poke
+
+        def __init__(self, poke_type: str = "126", id="", qq="", **_):
+            self._type = poke_type
+            self.id = str(id or "")
+            self.qq = str(qq or "")
+
+        def target_id(self):
+            return next(
+                (v for v in (self.id, self.qq) if v and v != "0"),
+                None,
+            )
+
     fake_components.ComponentType = _ComponentType
     fake_components.Plain = _Plain
     fake_components.Image = _Image
@@ -148,6 +186,7 @@ def _install_astrbot_stubs():
     fake_components.Node = _Node
     fake_components.Nodes = _Nodes
     fake_components.Forward = _Forward
+    fake_components.Poke = _Poke
 
     # quoted_message stub:模拟 AstrBot 内置引用消息提取器
     # (Node/Nodes 从组件链内嵌 content 提取"发送人: 内容";
@@ -360,6 +399,18 @@ class FakeEvent:
         self._forward_text = forward_text
         # 模拟 OneBot bot 接口(结构化聊天记录拉取);None 表示平台无 bot 接口
         self.bot = FakeBot(bot_responses) if bot_responses is not None else None
+        # 对齐 AstrMessageEvent:call_llm=True 表示禁止默认 LLM 请求
+        self.call_llm = False
+        self._stopped = False
+
+    def should_call_llm(self, call_llm: bool) -> None:
+        self.call_llm = call_llm
+
+    def stop_event(self):
+        self._stopped = True
+
+    def is_stopped(self):
+        return self._stopped
 
     def get_self_id(self):
         return self._self_id

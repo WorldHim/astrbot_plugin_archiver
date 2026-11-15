@@ -12,6 +12,7 @@ from astrbot.api.star import Context, Star, register
 
 from .constants import (
     DEFAULT_DELETE_PERMISSION,
+    DEFAULT_POKE_TRIGGER,
     DEFAULT_UPLOAD_PERMISSION,
     FORWARD_PLATFORMS,  # noqa: F401  # re-export,保持旧导入路径兼容
     PLUGIN_NAME,
@@ -21,6 +22,49 @@ from .models import Quote
 from .quote_service import QuoteService
 from .storage import QuoteStorage
 from .web_api import register_web_apis
+
+
+def _component_type_name(comp) -> str:
+    """取组件的类型名(兼容 ComponentType 枚举成员与普通字符串)。"""
+    comp_type = getattr(comp, "type", "")
+    # ComponentType 是 (str, Enum):str(member) 是 "ComponentType.Poke",
+    # 但 member.value 与 == 比较均等价于 "Poke",故统一取 value
+    return str(getattr(comp_type, "value", comp_type) or "").lower()
+
+
+def _poke_targets_self(event: AstrMessageEvent) -> bool:
+    """判断本次消息链是否为「戳一戳 Bot」。
+
+    aiocqhttp(QQ) 适配器会把 notice 事件的 poke 子类型转换成 Poke 组件
+    (见 astrbot 的 _convert_handle_notice_event),其 target_id() 为被戳对象;
+    部分平台不下发 target,此时视为戳向 Bot。
+    """
+    self_id = str(event.get_self_id() or "").strip()
+    for comp in event.get_messages():
+        if _component_type_name(comp) != "poke":
+            continue
+        target = ""
+        getter = getattr(comp, "target_id", None)
+        if callable(getter):
+            try:
+                target = str(getter() or "").strip()
+            except Exception:  # noqa: BLE001 - 平台组件异常不应影响消息处理
+                target = ""
+        if not target or (self_id and target == self_id):
+            return True
+    return False
+
+
+class PokeTriggerFilter(filter.CustomFilter):
+    """放行「戳一戳 Bot」事件(与指令共用随机语录逻辑的监听器)。
+
+    框架在 WakingCheckStage 中逐个调用 handler 里的 event_filters,全部通过才会
+    激活该 handler;戳一戳不是指令,必须依靠自定义过滤器才能被激活。是否真正
+    响应由 handler 内读取的 poke_trigger 配置决定。
+    """
+
+    def filter(self, event, cfg) -> bool:
+        return _poke_targets_self(event)
 
 
 @register(
@@ -176,7 +220,6 @@ class ArchiverPlugin(Star):
                 )
                 return
         quote, owner_id, owner_name = self._service.random_quote(event, owner)
-        quote, owner_id, owner_name = self._service.random_quote(event, owner)
         if quote is None:
             if owner_id or owner_name:
                 yield event.plain_result(
@@ -187,6 +230,27 @@ class ArchiverPlugin(Star):
                 yield event.plain_result(
                     "语录库还是空的，回复一条消息发送 /保存 收录第一条语录吧！"
                 )
+            return
+        kind, payload = await self._service.emit_random(event, quote)
+        if kind == "sent":
+            return
+        yield event.chain_result(payload)
+
+    @filter.custom_filter(PokeTriggerFilter)
+    async def chuo_yi_chuo(self, event: AstrMessageEvent):
+        """被「戳一戳」时随机回一条语录（可在插件配置中关闭 poke_trigger）"""
+        # 戳一戳不是对话内容:无论功能是否开启,都不应落到默认 LLM 请求链路
+        # (私聊的戳一戳会被判定为唤醒,不抑制就会带着空消息调用 LLM)。
+        # 注意不能改用 event.stop_event():管道调度器在 RespondStage 之前
+        # 检测到停止就直接中断,下面 yield 出的结果永远发不出去。
+        event.should_call_llm(True)
+        if not self._cfg_bool("poke_trigger", DEFAULT_POKE_TRIGGER):
+            return
+        quote = self._service.random_quote(event)[0]
+        if quote is None:
+            yield event.plain_result(
+                "语录库还是空的，回复一条消息发送 /保存 收录第一条语录吧！"
+            )
             return
         kind, payload = await self._service.emit_random(event, quote)
         if kind == "sent":
